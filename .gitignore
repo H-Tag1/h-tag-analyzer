@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+backend/.env
+backend/static/screenshots/*.png
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+
+# Build (Java 잔재)
+build/
+*.class
+
+# 루트 PoC 잔재
+package.json
+package-lock.json
+node_modules/
+.gradle/
+
+# Java 잔재
+build/
+gradle/
+gradlew
+gradlew.bat
+build.gradle
+settings.gradle
+src/
+*.class
+*.jar
+
+# PoC 스크립트 및 임시 파일
+poc-*.js
+demo.html
+ga4Common.sample.js
+missing-tags.json
+screenshot-*.png
+screenshot-input-new.png
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.iml
