@@ -89,8 +89,6 @@ AZURE_OPENAI_DEPLOYMENT=gpt-4o
 AZURE_OPENAI_API_VERSION=2024-10-21
 ```
 
-> `AZURE_OPENAI_ENDPOINT` : `https://` 로 시작하고 `/openai.azure.com/` 으로 끝나는 URL (프로젝트 엔드포인트가 아닌 **Azure OpenAI 엔드포인트** 사용)
-
 ```bash
 uvicorn main:app --reload --port 8000
 ```
