@@ -34,8 +34,8 @@ URL을 입력하면 Playwright로 페이지를 캡처하고, Azure OpenAI(GPT-4o
 ### 1. 저장소 클론
 
 ```bash
-git clone https://github.com/{org}/{repo}.git
-cd h-tag-poc
+git clone https://github.com/shinmirim/h-tag-analyzer.git
+cd h-tag-analyzer
 ```
 
 ---
@@ -50,6 +50,8 @@ pip3 install -r requirements.txt
 
 # Playwright 브라우저 설치
 playwright install chromium
+# ※ macOS에서 명령어를 찾지 못하면 아래로 실행
+# python3 -m playwright install chromium
 
 # 환경변수 설정
 cp .env.example .env
