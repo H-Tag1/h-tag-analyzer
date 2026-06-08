@@ -27,14 +27,14 @@ URL을 입력하면 Playwright로 페이지를 캡처하고, Azure OpenAI(GPT-4o
 
 - [Python 3.9 이상](https://www.python.org/downloads/) — 백엔드 실행에 필요
 - [Node.js 18 이상](https://nodejs.org/) — 프론트엔드 실행에 필요
-- Azure OpenAI 리소스 (GPT-4o 배포 완료 상태)
+- Azure AI Foundry 프로젝트 + GPT-4o 배포 완료 상태 (아래 Azure 설정 참고)
 
 ---
 
 ### 1. 저장소 클론
 
 ```bash
-git clone https://github.com/shinmirim/h-tag-analyzer.git
+git clone https://github.com/H-Tag1/h-tag-analyzer.git
 cd h-tag-analyzer
 ```
 
@@ -43,12 +43,26 @@ cd h-tag-analyzer
 
 ---
 
-### 2. 백엔드 설정
+### 2. Azure AI Foundry 키 발급
+
+팀 관리자에게 아래 3가지 값을 받으세요.
+
+| 항목 | 설명 |
+|---|---|
+| API 키 | Azure AI Foundry 프로젝트 개요 페이지의 `API 키` |
+| Azure OpenAI 엔드포인트 | 같은 페이지의 `Azure OpenAI 엔드포인트` (형식: `https://xxx.openai.azure.com/`) |
+| 배포 이름 | GPT-4o 배포 시 지정한 이름 (기본값: `gpt-4o`) |
+
+> ⚠️ **API 키는 절대 GitHub에 올리지 마세요.** `.env` 파일은 `.gitignore`에 등록되어 있어 자동으로 제외됩니다.
+
+---
+
+### 3. 백엔드 설정
 
 ```bash
 cd backend
 ```
-> `cd backend` : backend 폴더로 이동
+> backend 폴더로 이동
 
 ```bash
 pip3 install -r requirements.txt
@@ -65,16 +79,17 @@ python3 -m playwright install chromium
 cp .env.example .env
 ```
 > `.env.example` 파일을 복사해서 `.env` 파일 생성
-> `.env` 파일에 실제 Azure OpenAI 키를 입력해야 AI 분석이 작동
 
-`.env` 파일을 열어 Azure OpenAI 정보를 입력합니다.
+`.env` 파일을 열어 발급받은 Azure OpenAI 정보를 입력합니다.
 
 ```env
-AZURE_OPENAI_KEY=your-api-key-here
+AZURE_OPENAI_KEY=여기에_API_키_입력
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 AZURE_OPENAI_DEPLOYMENT=gpt-4o
-AZURE_OPENAI_API_VERSION=2024-02-01
+AZURE_OPENAI_API_VERSION=2024-10-21
 ```
+
+> `AZURE_OPENAI_ENDPOINT` : `https://` 로 시작하고 `/openai.azure.com/` 으로 끝나는 URL (프로젝트 엔드포인트가 아닌 **Azure OpenAI 엔드포인트** 사용)
 
 ```bash
 uvicorn main:app --reload --port 8000
@@ -87,7 +102,7 @@ uvicorn main:app --reload --port 8000
 
 ---
 
-### 3. 프론트엔드 설정
+### 4. 프론트엔드 설정
 
 **새 터미널을 열고** 실행합니다. (백엔드 터미널은 그대로 유지)
 
@@ -110,13 +125,17 @@ npm run dev
 
 ---
 
-### 4. 접속
+### 5. 접속
 
 두 서버가 모두 켜진 상태에서 브라우저로 접속:
 
 **[http://localhost:5173](http://localhost:5173)**
 
 > 백엔드(8000)와 프론트엔드(5173) **두 서버가 동시에 켜져 있어야** 정상 동작합니다.
+
+### 서버 종료
+
+각 터미널에서 `Ctrl + C` 를 누르면 서버가 종료됩니다.
 
 ---
 
@@ -128,7 +147,7 @@ h-tag-analyzer/
 │   ├── main.py                  # FastAPI 앱 진입점
 │   ├── config.py                # 환경변수 설정
 │   ├── requirements.txt         # Python 패키지 목록
-│   ├── .env.example             # 환경변수 템플릿 (키 없음)
+│   ├── .env.example             # 환경변수 템플릿 (키 없음 — 복사 후 값 입력)
 │   ├── routers/                 # API 엔드포인트
 │   ├── services/                # 비즈니스 로직
 │   └── models/                  # Pydantic 모델
@@ -139,7 +158,6 @@ h-tag-analyzer/
     │   ├── hooks/               # useScan (SSE)
     │   └── types/               # TypeScript 타입 정의
     └── vite.config.ts           # /api → localhost:8000 프록시
-
 ```
 
 ## API 엔드포인트
