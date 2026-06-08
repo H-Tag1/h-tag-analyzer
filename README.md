@@ -23,11 +23,11 @@ URL을 입력하면 Playwright로 페이지를 캡처하고, Azure OpenAI(GPT-4o
 
 ## 로컬 실행 방법
 
-### 사전 준비
+### 사전 준비 (설치 필요)
 
-- Python 3.9 이상
-- Node.js 18 이상
-- Azure OpenAI 리소스 (GPT-4o 배포 완료)
+- [Python 3.9 이상](https://www.python.org/downloads/) — 백엔드 실행에 필요
+- [Node.js 18 이상](https://nodejs.org/) — 프론트엔드 실행에 필요
+- Azure OpenAI 리소스 (GPT-4o 배포 완료 상태)
 
 ---
 
@@ -38,24 +38,34 @@ git clone https://github.com/shinmirim/h-tag-analyzer.git
 cd h-tag-analyzer
 ```
 
+> `git clone` : GitHub에서 소스코드를 내 컴퓨터로 복사하는 명령어
+> `cd h-tag-analyzer` : 복사된 폴더 안으로 이동
+
 ---
 
 ### 2. 백엔드 설정
 
 ```bash
 cd backend
+```
+> `cd backend` : backend 폴더로 이동
 
-# 패키지 설치
+```bash
 pip3 install -r requirements.txt
+```
+> Python 패키지 일괄 설치. `requirements.txt`에 적힌 라이브러리(FastAPI, Playwright 등)를 자동으로 모두 설치
 
-# Playwright 브라우저 설치
-playwright install chromium
-# ※ macOS에서 명령어를 찾지 못하면 아래로 실행
-# python3 -m playwright install chromium
+```bash
+python3 -m playwright install chromium
+```
+> Playwright가 웹 페이지를 열고 스크린샷을 찍을 때 사용하는 **Chromium 브라우저(헤드리스)** 를 설치
+> ※ 브라우저가 없으면 크롤링이 동작하지 않으므로 반드시 실행
 
-# 환경변수 설정
+```bash
 cp .env.example .env
 ```
+> `.env.example` 파일을 복사해서 `.env` 파일 생성
+> `.env` 파일에 실제 Azure OpenAI 키를 입력해야 AI 분석이 작동
 
 `.env` 파일을 열어 Azure OpenAI 정보를 입력합니다.
 
@@ -66,40 +76,58 @@ AZURE_OPENAI_DEPLOYMENT=gpt-4o
 AZURE_OPENAI_API_VERSION=2024-02-01
 ```
 
-백엔드 실행:
-
 ```bash
 uvicorn main:app --reload --port 8000
 ```
+> 백엔드 서버 실행
+> - `uvicorn` : Python 웹 서버 실행 도구
+> - `main:app` : `main.py` 파일 안의 `app` 을 실행
+> - `--reload` : 코드 수정 시 서버 자동 재시작 (개발용)
+> - `--port 8000` : 8000번 포트로 실행
 
 ---
 
 ### 3. 프론트엔드 설정
 
-새 터미널에서:
+**새 터미널을 열고** 실행합니다. (백엔드 터미널은 그대로 유지)
 
 ```bash
 cd frontend
+```
+> frontend 폴더로 이동
+
+```bash
 npm install
+```
+> React 프로젝트에 필요한 패키지를 일괄 설치
+> `package.json`에 정의된 라이브러리를 모두 자동 다운로드 (최초 1회만 실행)
+
+```bash
 npm run dev
 ```
+> 프론트엔드 개발 서버 실행
+> 실행 후 `http://localhost:5173` 주소로 화면 접속 가능
 
 ---
 
 ### 4. 접속
 
-브라우저에서 [http://localhost:5173](http://localhost:5173) 열기
+두 서버가 모두 켜진 상태에서 브라우저로 접속:
+
+**[http://localhost:5173](http://localhost:5173)**
+
+> 백엔드(8000)와 프론트엔드(5173) **두 서버가 동시에 켜져 있어야** 정상 동작합니다.
 
 ---
 
 ## 디렉토리 구조
 
 ```
-h-tag-poc/
+h-tag-analyzer/
 ├── backend/
 │   ├── main.py                  # FastAPI 앱 진입점
 │   ├── config.py                # 환경변수 설정
-│   ├── requirements.txt
+│   ├── requirements.txt         # Python 패키지 목록
 │   ├── .env.example             # 환경변수 템플릿 (키 없음)
 │   ├── routers/                 # API 엔드포인트
 │   ├── services/                # 비즈니스 로직
@@ -111,6 +139,7 @@ h-tag-poc/
     │   ├── hooks/               # useScan (SSE)
     │   └── types/               # TypeScript 타입 정의
     └── vite.config.ts           # /api → localhost:8000 프록시
+
 ```
 
 ## API 엔드포인트
