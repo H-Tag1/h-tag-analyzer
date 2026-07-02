@@ -1,21 +1,20 @@
-import { useState, useEffect } from 'react'
-import { Search, Clock, ArrowRight, Eye, LayoutGrid } from 'lucide-react'
+import { useState } from 'react'
+import { Search, Clock, ArrowRight, ArrowLeft, LayoutGrid } from 'lucide-react'
 
 interface Props {
   onStart: (url: string, fullScan: boolean) => void
+  onBack: () => void
 }
 
 const HISTORY_KEY = 'htag_url_history'
 
-export default function InputPage({ onStart }: Props) {
+export default function InputPage({ onStart, onBack }: Props) {
   const [url, setUrl] = useState('')
   const [fullScan, setFullScan] = useState(false)
-  const [history, setHistory] = useState<string[]>([])
-
-  useEffect(() => {
+  const [history] = useState<string[]>(() => {
     const saved = localStorage.getItem(HISTORY_KEY)
-    if (saved) setHistory(JSON.parse(saved).slice(0, 5))
-  }, [])
+    return saved ? JSON.parse(saved).slice(0, 5) : []
+  })
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -34,12 +33,18 @@ export default function InputPage({ onStart }: Props) {
       </div>
 
       <div className="relative z-10 w-full max-w-2xl animate-fade-in">
+        <button
+          type="button"
+          onClick={onBack}
+          className="mb-8 inline-flex items-center gap-2 text-sm text-[#52525B] hover:text-white transition-colors"
+        >
+          <ArrowLeft size={16} />
+          메인으로
+        </button>
+
         <div className="text-center mb-10">
-          <div className="inline-flex items-center gap-2 mb-6 px-3 py-1 rounded-full border border-purple-800/50 bg-purple-900/20 text-purple-400 text-sm">
-            <Eye size={14} />
-            <span>AI Vision GA4 Analyzer</span>
-          </div>
-          <h1 className="text-5xl font-bold text-white mb-4 tracking-tight">H-Tag Analyzer</h1>
+          <p className="text-sm text-purple-400 mb-3">검사하기</p>
+          <h1 className="text-5xl font-bold text-white mb-4 tracking-tight">검사 URL 입력</h1>
           <p className="text-[#A1A1AA] text-lg leading-relaxed">
             URL을 입력하면 AI가 스크린샷을 분석해<br />
             <span className="text-purple-400">누락된 GA4 태그</span>를 시각적으로 찾아드립니다.
@@ -63,7 +68,7 @@ export default function InputPage({ onStart }: Props) {
               disabled={!url.trim()}
               className="px-6 py-4 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-semibold rounded-xl flex items-center gap-2 transition-all disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
             >
-              스캔 시작
+              검사 시작
               <ArrowRight size={18} />
             </button>
           </div>

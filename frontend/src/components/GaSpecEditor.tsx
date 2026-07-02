@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useMemo, useState } from 'react'
 
 interface Props {
   spec: Record<string, unknown>
@@ -6,13 +6,9 @@ interface Props {
 }
 
 export default function GaSpecEditor({ spec, onChange }: Props) {
-  const [raw, setRaw] = useState(JSON.stringify(spec, null, 2))
+  const initialRaw = useMemo(() => JSON.stringify(spec, null, 2), [spec])
+  const [raw, setRaw] = useState(initialRaw)
   const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    setRaw(JSON.stringify(spec, null, 2))
-    setError(null)
-  }, [spec])
 
   const handleChange = (val: string) => {
     setRaw(val)
