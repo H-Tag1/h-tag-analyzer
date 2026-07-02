@@ -111,18 +111,6 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-4 text-center">
-        {[
-          { label: 'AI 비전 분석', desc: '스크린샷 기반 누락 태그 탐지' },
-          { label: '바운딩박스 시각화', desc: '누락 요소 위치를 직접 표시' },
-          { label: '코드 자동 생성', desc: 'dataLayer.push 코드 즉시 생성' },
-        ].map(f => (
-          <div key={f.label} className="bg-[#1A1A1A] border border-[#2A2A2A] rounded-xl p-4">
-            <p className="text-white text-sm font-medium mb-1">{f.label}</p>
-            <p className="text-[#52525B] text-xs">{f.desc}</p>
-          </div>
-        ))}
-      </div>
     </div>
   )
 
