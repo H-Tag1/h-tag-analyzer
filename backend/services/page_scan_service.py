@@ -3,6 +3,7 @@ import os
 import logging
 from typing import List, Dict, Any, Tuple, Optional
 
+from PIL import Image
 from playwright.async_api import async_playwright, Page
 
 from config import settings
@@ -84,11 +85,10 @@ async def _take_screenshot(page: Page) -> Tuple[str, int, int]:
     os.makedirs(settings.screenshot_dir, exist_ok=True)
     path = os.path.join(settings.screenshot_dir, f"{screenshot_id}.png")
 
-    await page.screenshot(path=path, full_page=False)
+    await page.screenshot(path=path, full_page=True)
 
-    viewport = page.viewport_size
-    width = viewport["width"] if viewport else 1440
-    height = viewport["height"] if viewport else 900
+    with Image.open(path) as image:
+        width, height = image.size
 
     logger.info(f"Screenshot saved: {screenshot_id} ({width}x{height})")
     return screenshot_id, width, height
