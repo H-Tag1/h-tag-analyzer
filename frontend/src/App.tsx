@@ -1,12 +1,11 @@
 import { useState } from 'react'
 import './index.css'
 import MainPage from './pages/MainPage'
-import InputPage from './pages/InputPage'
 import ScanningPage from './pages/ScanningPage'
 import AnalysisPage from './pages/AnalysisPage'
 import { useScan } from './hooks/useScan'
 
-type Screen = 'main' | 'input' | 'scanning' | 'results'
+type Screen = 'main' | 'scanning' | 'results'
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('main')
@@ -19,20 +18,13 @@ export default function App() {
     start(url, fullScan)
   }
 
-  const handleBack = () => {
+  const handleScanBack = () => {
     reset()
     setTargetUrl('')
     setScreen('main')
   }
 
-  const handleScanBack = () => {
-    reset()
-    setScreen('input')
-  }
-
-  if (screen === 'main') return <MainPage onScanStart={() => setScreen('input')} />
-
-  if (screen === 'input') return <InputPage onStart={handleStart} onBack={handleBack} />
+  if (screen === 'main') return <MainPage onScanStart={handleStart} />
 
   if ((screen === 'scanning' || screen === 'results') && step === 'done' && pages.length > 0) {
     return <AnalysisPage pages={pages} onBack={handleScanBack} />
