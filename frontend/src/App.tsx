@@ -1,22 +1,16 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import './index.css'
-import InputPage from './pages/InputPage'
+import MainPage from './pages/MainPage'
 import ScanningPage from './pages/ScanningPage'
 import AnalysisPage from './pages/AnalysisPage'
 import { useScan } from './hooks/useScan'
 
-type Screen = 'input' | 'scanning' | 'results'
+type Screen = 'main' | 'scanning' | 'results'
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>('input')
+  const [screen, setScreen] = useState<Screen>('main')
   const [targetUrl, setTargetUrl] = useState('')
   const { step, error, pages, batchProgress, start, reset } = useScan()
-
-  useEffect(() => {
-    if (step === 'done' && screen === 'scanning') {
-      setScreen('results')
-    }
-  }, [step, screen])
 
   const handleStart = (url: string, fullScan: boolean) => {
     setTargetUrl(url)
@@ -24,12 +18,17 @@ export default function App() {
     start(url, fullScan)
   }
 
-  const handleBack = () => {
+  const handleScanBack = () => {
     reset()
-    setScreen('input')
+    setTargetUrl('')
+    setScreen('main')
   }
 
-  if (screen === 'input') return <InputPage onStart={handleStart} />
+  if (screen === 'main') return <MainPage onScanStart={handleStart} />
+
+  if ((screen === 'scanning' || screen === 'results') && step === 'done' && pages.length > 0) {
+    return <AnalysisPage pages={pages} onBack={handleScanBack} />
+  }
 
   if (screen === 'scanning') {
     if (error) {
@@ -37,7 +36,7 @@ export default function App() {
         <div className="min-h-screen bg-[#0F0F0F] flex items-center justify-center">
           <div className="text-center">
             <p className="text-red-400 mb-4">{error}</p>
-            <button onClick={handleBack} className="text-sm text-[#52525B] hover:text-white transition-colors">
+            <button onClick={handleScanBack} className="text-sm text-[#52525B] hover:text-white transition-colors">
               돌아가기
             </button>
           </div>
@@ -49,13 +48,9 @@ export default function App() {
         step={step}
         url={targetUrl}
         batchProgress={batchProgress}
-        onCancel={handleBack}
+        onCancel={handleScanBack}
       />
     )
-  }
-
-  if (screen === 'results' && pages.length > 0) {
-    return <AnalysisPage pages={pages} onBack={handleBack} />
   }
 
   return null
