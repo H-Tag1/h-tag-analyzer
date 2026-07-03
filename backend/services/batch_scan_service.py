@@ -18,6 +18,8 @@ from services.page_scan_service import (
 from services.ai_analysis_service import analyze_page
 
 logger = logging.getLogger(__name__)
+AUTH_RESULT_EVENTS = {"login", "logout", "sign_up"}
+AUTH_RESULT_TEXTS = {"로그인", "로그아웃", "회원가입"}
 
 
 async def batch_scan(url: str, login: Optional[ScanLoginCredentials] = None) -> AsyncGenerator[str, None]:
@@ -59,6 +61,8 @@ async def single_scan(url: str, login: Optional[ScanLoginCredentials] = None) ->
 
     screenshot_path = os.path.join(settings.screenshot_dir, f"{screenshot_id}.png")
     issues = await analyze_page(screenshot_path, elements, datalayer)
+    if login and login.enabled:
+        issues = _exclude_auth_results(issues)
 
     page_data = PageScanData(
         url=url,
@@ -124,6 +128,7 @@ async def _scan_authenticated_single(page, url: str) -> PageScanData:
     screenshot_id, width, height, elements, datalayer = await collect_authenticated_page_data(page, url)
     screenshot_path = os.path.join(settings.screenshot_dir, f"{screenshot_id}.png")
     issues = await analyze_page(screenshot_path, elements, datalayer)
+    issues = _exclude_auth_results(issues)
     return PageScanData(
         url=url,
         screenshot_id=screenshot_id,
@@ -133,3 +138,23 @@ async def _scan_authenticated_single(page, url: str) -> PageScanData:
         datalayer_events=datalayer,
         issues=issues,
     )
+
+
+def _exclude_auth_results(issues):
+    return [
+        issue
+        for issue in issues
+        if not _is_auth_result(issue)
+    ]
+
+
+def _is_auth_result(issue) -> bool:
+    event_name = issue.recommended_ga_spec.get("event") if isinstance(issue.recommended_ga_spec, dict) else None
+    text = (issue.element_text or "").strip()
+    selector = (issue.element_selector or "").strip()
+
+    if event_name in AUTH_RESULT_EVENTS:
+        return True
+    if text in AUTH_RESULT_TEXTS:
+        return True
+    return selector == "#loginBtn" or "menu_login_join" in selector
