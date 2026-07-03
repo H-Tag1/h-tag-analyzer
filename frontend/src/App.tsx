@@ -4,6 +4,7 @@ import MainPage from './pages/MainPage'
 import ScanningPage from './pages/ScanningPage'
 import AnalysisPage from './pages/AnalysisPage'
 import { useScan } from './hooks/useScan'
+import type { ScanStartOptions } from './types'
 
 type Screen = 'main' | 'scanning' | 'results'
 
@@ -12,10 +13,10 @@ export default function App() {
   const [targetUrl, setTargetUrl] = useState('')
   const { step, error, pages, batchProgress, start, reset } = useScan()
 
-  const handleStart = (url: string, fullScan: boolean) => {
-    setTargetUrl(url)
+  const handleStart = (options: ScanStartOptions) => {
+    setTargetUrl(options.url)
     setScreen('scanning')
-    start(url, fullScan)
+    start(options)
   }
 
   const handleScanBack = () => {
