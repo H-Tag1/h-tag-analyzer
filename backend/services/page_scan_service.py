@@ -21,6 +21,8 @@ MOBILE_USER_AGENT = (
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
     "Mobile/15E148 Safari/604.1"
 )
+AUTH_EXCLUDED_PATH_PARTS = ("/mm/mbshAuca/", "/mm/mbshJoin/")
+AUTH_EXCLUDED_TEXTS = {"로그인", "로그아웃", "회원가입"}
 
 
 async def collect_page_data(
@@ -40,7 +42,7 @@ async def collect_page_data(
                 await page.goto(url, wait_until="load", timeout=60000)
             await page.wait_for_timeout(1500)
 
-            elements = await _collect_elements(page)
+            elements = await _collect_elements(page, exclude_auth_actions=bool(login and login.enabled))
             datalayer = await _collect_datalayer(page)
             screenshot_id, width, height = await _take_screenshot(page)
 
@@ -56,7 +58,7 @@ async def collect_authenticated_page_data(
     await _goto_scan_target(page, url)
     await page.wait_for_timeout(1500)
 
-    elements = await _collect_elements(page)
+    elements = await _collect_elements(page, exclude_auth_actions=True)
     datalayer = await _collect_datalayer(page)
     screenshot_id, width, height = await _take_screenshot(page)
 
@@ -69,7 +71,7 @@ async def prepare_authenticated_scan_page(browser: Browser, url: str, login: Sca
     return page
 
 
-async def _collect_elements(page: Page) -> List[PageElement]:
+async def _collect_elements(page: Page, exclude_auth_actions: bool = False) -> List[PageElement]:
     raw = await page.evaluate("""() => {
         return Array.from(document.querySelectorAll('button, a, [onclick], input[type="submit"], input[type="button"]'))
             .filter(el => {
@@ -97,6 +99,9 @@ async def _collect_elements(page: Page) -> List[PageElement]:
 
     elements = []
     for item in raw:
+        if exclude_auth_actions and _is_auth_action_element(item):
+            continue
+
         bb_data = item.get("bounding_box", {})
         elements.append(PageElement(
             selector=item["selector"],
@@ -160,13 +165,7 @@ async def _login_hddfs_pc(page: Page, target_url: str, login: ScanLoginCredentia
     await page.goto(target_url, wait_until="load", timeout=60000)
     await page.wait_for_timeout(1000)
 
-    try:
-        async with page.expect_popup(timeout=10000) as popup_info:
-            await page.evaluate("(url) => login(url)", target_url)
-        login_page = await popup_info.value
-    except PlaywrightTimeoutError:
-        login_page = page
-        await page.goto(_login_url_for(target_url), wait_until="load", timeout=60000)
+    login_page = await _open_pc_login_page(page, target_url)
 
     login_page.on("dialog", _accept_dialog)
     await _submit_login_form(login_page, login)
@@ -181,6 +180,20 @@ async def _login_hddfs_pc(page: Page, target_url: str, login: ScanLoginCredentia
         await page.wait_for_load_state("load", timeout=15000)
     except PlaywrightTimeoutError:
         pass
+
+
+async def _open_pc_login_page(page: Page, target_url: str) -> Page:
+    has_login_function = await page.evaluate("() => typeof login === 'function'")
+    if has_login_function:
+        try:
+            async with page.expect_popup(timeout=10000) as popup_info:
+                await page.evaluate("(url) => login(url)", target_url)
+            return await popup_info.value
+        except (PlaywrightError, PlaywrightTimeoutError):
+            pass
+
+    await page.goto(_login_url_for(target_url), wait_until="load", timeout=60000)
+    return page
 
 
 async def _login_hddfs_mobile(page: Page, target_url: str, login: ScanLoginCredentials) -> None:
@@ -363,7 +376,7 @@ async def discover_links_from_page(page: Page, url: str, max_pages: int = 20) ->
             .filter(h => h && !h.startsWith('javascript') && !h.startsWith('mailto'))
     """)
 
-    return _filter_normalized_links(hrefs, url, base_domain, max_pages)
+    return _filter_normalized_links(hrefs, url, base_domain, max_pages, exclude_auth_pages=True)
 
 
 def _normalize_url(href: str, base_domain: str) -> Optional[str]:
@@ -382,11 +395,20 @@ def _normalize_url(href: str, base_domain: str) -> Optional[str]:
         return None
 
 
-def _filter_normalized_links(hrefs: List[str], url: str, base_domain: str, max_pages: int) -> List[str]:
+def _filter_normalized_links(
+    hrefs: List[str],
+    url: str,
+    base_domain: str,
+    max_pages: int,
+    exclude_auth_pages: bool = False,
+) -> List[str]:
     seen = {url}
     result = []
     for href in hrefs:
         normalized = _normalize_url(href, base_domain)
+        if exclude_auth_pages and normalized and _is_auth_related_url(normalized):
+            continue
+
         if normalized and normalized not in seen:
             seen.add(normalized)
             result.append(normalized)
@@ -394,3 +416,21 @@ def _filter_normalized_links(hrefs: List[str], url: str, base_domain: str, max_p
                 break
 
     return result
+
+
+def _is_auth_related_url(url: str) -> bool:
+    try:
+        path = urlparse(url).path
+        return any(part in path for part in AUTH_EXCLUDED_PATH_PARTS)
+    except Exception:
+        return False
+
+
+def _is_auth_action_element(item: Dict[str, Any]) -> bool:
+    text = (item.get("text") or "").strip()
+    selector = (item.get("selector") or "").strip()
+
+    if text in AUTH_EXCLUDED_TEXTS:
+        return True
+
+    return selector == "#loginBtn" or "menu_login_join" in selector
