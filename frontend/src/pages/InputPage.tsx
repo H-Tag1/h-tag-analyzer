@@ -32,7 +32,7 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory))
     onStart({
       url: normalized,
-      fullScan: loginEnabled ? false : fullScan,
+      fullScan,
       login: loginEnabled
         ? {
             enabled: true,
@@ -93,15 +93,11 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
         </div>
 
         <div
-          onClick={() => {
-            if (!loginEnabled) setFullScan(v => !v)
-          }}
+          onClick={() => setFullScan(v => !v)}
           className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-all select-none ${
             fullScan
               ? 'border-purple-700 bg-purple-900/20 text-white'
-              : loginEnabled
-                ? 'border-[#2A2A2A] bg-[#151515] text-[#52525B] cursor-not-allowed'
-                : 'border-[#2A2A2A] bg-[#1A1A1A] text-[#A1A1AA] hover:border-[#3A3A3A]'
+              : 'border-[#2A2A2A] bg-[#1A1A1A] text-[#A1A1AA] hover:border-[#3A3A3A]'
           }`}
         >
           <div className={`w-9 h-5 rounded-full relative transition-colors ${fullScan ? 'bg-purple-600' : 'bg-[#3A3A3A]'}`}>
@@ -110,9 +106,7 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
           <LayoutGrid size={16} className={fullScan ? 'text-purple-400' : 'text-[#52525B]'} />
           <div>
             <p className="text-sm font-medium">전체 온라인몰 체크</p>
-            <p className="text-xs text-[#52525B]">
-              {loginEnabled ? '로그인 후 검사는 단일 URL만 지원합니다' : '동일 도메인 내부 페이지를 depth 2까지 자동 스캔합니다'}
-            </p>
+            <p className="text-xs text-[#52525B]">동일 도메인 내부 페이지를 depth 2까지 자동 스캔합니다</p>
           </div>
         </div>
 
@@ -123,12 +117,7 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
         >
           <button
             type="button"
-            onClick={() => {
-              setLoginEnabled(v => {
-                if (!v) setFullScan(false)
-                return !v
-              })
-            }}
+            onClick={() => setLoginEnabled(v => !v)}
             className="flex w-full items-center gap-3 px-4 py-3 text-left"
           >
             <div className={`w-9 h-5 rounded-full relative transition-colors ${loginEnabled ? 'bg-purple-600' : 'bg-[#3A3A3A]'}`}>
