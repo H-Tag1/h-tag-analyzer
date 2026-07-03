@@ -37,9 +37,6 @@ async def create_scan_session(payload: ScanStartRequest):
     _cleanup_expired_sessions()
 
     if payload.login and payload.login.enabled:
-        if payload.fullScan:
-            raise HTTPException(status_code=400, detail="로그인 후 검사는 단일 URL 검사만 지원합니다.")
-
         if not payload.login.username.strip() or not payload.login.password:
             raise HTTPException(status_code=400, detail="로그인 ID와 비밀번호를 입력해주세요.")
 

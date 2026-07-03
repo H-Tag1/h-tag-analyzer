@@ -49,6 +49,26 @@ async def collect_page_data(
             await browser.close()
 
 
+async def collect_authenticated_page_data(
+    page: Page,
+    url: str,
+) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]]]:
+    await _goto_scan_target(page, url)
+    await page.wait_for_timeout(1500)
+
+    elements = await _collect_elements(page)
+    datalayer = await _collect_datalayer(page)
+    screenshot_id, width, height = await _take_screenshot(page)
+
+    return screenshot_id, width, height, elements, datalayer
+
+
+async def prepare_authenticated_scan_page(browser: Browser, url: str, login: ScanLoginCredentials) -> Page:
+    page = await _new_scan_page(browser, url)
+    await _login_hddfs(page, url, login)
+    return page
+
+
 async def _collect_elements(page: Page) -> List[PageElement]:
     raw = await page.evaluate("""() => {
         return Array.from(document.querySelectorAll('button, a, [onclick], input[type="submit"], input[type="button"]'))
@@ -255,6 +275,23 @@ async def _ensure_target_page(page: Page, target_url: str) -> None:
     await page.wait_for_timeout(1000)
 
 
+async def _goto_scan_target(page: Page, url: str) -> None:
+    if page.url == url:
+        return
+
+    try:
+        await page.goto(url, wait_until="load", timeout=60000)
+    except PlaywrightError as e:
+        if "interrupted by another navigation" not in str(e):
+            raise
+        try:
+            await page.wait_for_load_state("load", timeout=15000)
+        except PlaywrightTimeoutError:
+            pass
+
+    await page.wait_for_timeout(1000)
+
+
 def _same_host(current_url: str, target_url: str) -> bool:
     try:
         return (urlparse(current_url).hostname or "").lower() == (urlparse(target_url).hostname or "").lower()
@@ -311,6 +348,24 @@ async def discover_links(url: str, max_pages: int = 20) -> List[str]:
     return result
 
 
+async def discover_links_from_page(page: Page, url: str, max_pages: int = 20) -> List[str]:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    base_domain = f"{parsed.scheme}://{parsed.netloc}"
+
+    await _goto_scan_target(page, url)
+    await page.wait_for_timeout(1500)
+
+    hrefs = await page.evaluate("""() =>
+        Array.from(document.querySelectorAll('a[href]'))
+            .map(a => a.href)
+            .filter(h => h && !h.startsWith('javascript') && !h.startsWith('mailto'))
+    """)
+
+    return _filter_normalized_links(hrefs, url, base_domain, max_pages)
+
+
 def _normalize_url(href: str, base_domain: str) -> Optional[str]:
     from urllib.parse import urlparse, urlunparse
     import re
@@ -325,3 +380,17 @@ def _normalize_url(href: str, base_domain: str) -> Optional[str]:
         return normalized
     except Exception:
         return None
+
+
+def _filter_normalized_links(hrefs: List[str], url: str, base_domain: str, max_pages: int) -> List[str]:
+    seen = {url}
+    result = []
+    for href in hrefs:
+        normalized = _normalize_url(href, base_domain)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+            if len(result) >= max_pages:
+                break
+
+    return result
