@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { CheckCircle2, FileSpreadsheet, SearchCheck, Upload, WandSparkles } from 'lucide-react'
 import InputPage from './InputPage'
+import type { ScanStartOptions } from '../types'
 
 interface Props {
-  onScanStart: (url: string, fullScan: boolean) => void
+  onScanStart: (options: ScanStartOptions) => void
 }
 
 type MainTab = 'scan' | 'new'

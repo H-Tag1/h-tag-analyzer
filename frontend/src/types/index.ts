@@ -25,6 +25,21 @@ export interface PageScanData {
 
 export type ScanMode = 'single' | 'batch'
 
+export type LoginMemberType = 'integrated' | 'simple'
+
+export interface ScanLoginCredentials {
+  enabled: boolean
+  memberType: LoginMemberType
+  username: string
+  password: string
+}
+
+export interface ScanStartOptions {
+  url: string
+  fullScan: boolean
+  login?: ScanLoginCredentials
+}
+
 export type ScanEventType =
   | { type: 'scan_start'; url: string; mode: ScanMode }
   | { type: 'screenshot_done'; screenshotId: string; width: number; height: number }

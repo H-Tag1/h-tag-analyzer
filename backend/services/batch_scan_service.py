@@ -1,9 +1,10 @@
 import json
 import logging
 import os
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 from config import settings
+from models.scan_request import ScanLoginCredentials
 from models.page_scan_data import PageScanData
 from services.page_scan_service import collect_page_data, discover_links
 from services.ai_analysis_service import analyze_page
@@ -11,8 +12,12 @@ from services.ai_analysis_service import analyze_page
 logger = logging.getLogger(__name__)
 
 
-async def batch_scan(url: str) -> AsyncGenerator[str, None]:
+async def batch_scan(url: str, login: Optional[ScanLoginCredentials] = None) -> AsyncGenerator[str, None]:
     yield json.dumps({"type": "scan_start", "url": url, "mode": "batch"})
+
+    if login and login.enabled:
+        yield json.dumps({"type": "error", "message": "로그인 후 검사는 단일 URL 검사만 지원합니다."})
+        return
 
     discovered = await discover_links(url, max_pages=20)
     all_urls = [url] + discovered
@@ -34,10 +39,10 @@ async def batch_scan(url: str) -> AsyncGenerator[str, None]:
     yield json.dumps({"type": "batch_complete", "pages": pages})
 
 
-async def single_scan(url: str) -> AsyncGenerator[str, None]:
+async def single_scan(url: str, login: Optional[ScanLoginCredentials] = None) -> AsyncGenerator[str, None]:
     yield json.dumps({"type": "scan_start", "url": url, "mode": "single"})
 
-    screenshot_id, width, height, elements, datalayer = await collect_page_data(url)
+    screenshot_id, width, height, elements, datalayer = await collect_page_data(url, login)
 
     yield json.dumps({"type": "screenshot_done", "screenshotId": screenshot_id, "width": width, "height": height})
     yield json.dumps({"type": "elements_collected", "count": len(elements)})
