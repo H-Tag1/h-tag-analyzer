@@ -4,13 +4,20 @@ import logging
 from typing import List, Dict, Any, Tuple, Optional
 
 from PIL import Image
-from playwright.async_api import async_playwright, Page
+from playwright.async_api import Browser, Page, async_playwright
 
 from config import settings
 from models.page_element import PageElement
 from models.bounding_box import BoundingBox
 
 logger = logging.getLogger(__name__)
+
+MOBILE_HOSTS = {"m.hddfs.com", "mcn.hd-dfs.com", "men.hddfs.com"}
+MOBILE_USER_AGENT = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+    "Mobile/15E148 Safari/604.1"
+)
 
 
 async def collect_page_data(url: str) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]]]:
@@ -20,7 +27,7 @@ async def collect_page_data(url: str) -> Tuple[str, int, int, List[PageElement],
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         try:
-            page = await browser.new_page(viewport={"width": 1440, "height": 900})
+            page = await _new_scan_page(browser, url)
             await page.goto(url, wait_until="load", timeout=60000)
             await page.wait_for_timeout(1500)
 
@@ -85,13 +92,36 @@ async def _take_screenshot(page: Page) -> Tuple[str, int, int]:
     os.makedirs(settings.screenshot_dir, exist_ok=True)
     path = os.path.join(settings.screenshot_dir, f"{screenshot_id}.png")
 
-    await page.screenshot(path=path, full_page=True)
+    await page.screenshot(path=path, full_page=True, scale="css")
 
     with Image.open(path) as image:
         width, height = image.size
 
     logger.info(f"Screenshot saved: {screenshot_id} ({width}x{height})")
     return screenshot_id, width, height
+
+
+async def _new_scan_page(browser: Browser, url: str) -> Page:
+    if _is_mobile_url(url):
+        return await browser.new_page(
+            viewport={"width": 390, "height": 844},
+            user_agent=MOBILE_USER_AGENT,
+            is_mobile=True,
+            has_touch=True,
+            device_scale_factor=3,
+        )
+
+    return await browser.new_page(viewport={"width": 1440, "height": 900})
+
+
+def _is_mobile_url(url: str) -> bool:
+    from urllib.parse import urlparse
+
+    try:
+        host = (urlparse(url).hostname or "").lower()
+        return host in MOBILE_HOSTS
+    except Exception:
+        return False
 
 
 async def discover_links(url: str, max_pages: int = 20) -> List[str]:
@@ -104,7 +134,7 @@ async def discover_links(url: str, max_pages: int = 20) -> List[str]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         try:
-            page = await browser.new_page(viewport={"width": 1440, "height": 900})
+            page = await _new_scan_page(browser, url)
             await page.goto(url, wait_until="load", timeout=60000)
             await page.wait_for_timeout(1500)
 
