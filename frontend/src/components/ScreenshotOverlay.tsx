@@ -19,6 +19,8 @@ export default function ScreenshotOverlay({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [scale, setScale] = useState(1)
+  const isMobileScreenshot = originalWidth <= 500
+  const maxDisplayWidth = isMobileScreenshot ? Math.min(originalWidth, 430) : undefined
 
   useEffect(() => {
     const update = () => {
@@ -32,7 +34,11 @@ export default function ScreenshotOverlay({
   }, [originalWidth])
 
   return (
-    <div ref={containerRef} className="relative w-full">
+    <div
+      ref={containerRef}
+      className={`relative w-full ${isMobileScreenshot ? 'mx-auto' : ''}`}
+      style={maxDisplayWidth ? { maxWidth: maxDisplayWidth } : undefined}
+    >
       <img
         src={`/api/screenshots/${screenshotId}`}
         alt="Page screenshot"
