@@ -1,14 +1,17 @@
+import asyncio
 import uuid
 import os
 import logging
 from typing import List, Dict, Any, Tuple, Optional
+from urllib.parse import quote, urlparse, urlunparse
 
 from PIL import Image
-from playwright.async_api import Browser, Page, async_playwright
+from playwright.async_api import Browser, Error as PlaywrightError, Page, TimeoutError as PlaywrightTimeoutError, async_playwright
 
 from config import settings
 from models.page_element import PageElement
 from models.bounding_box import BoundingBox
+from models.scan_request import ScanLoginCredentials
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +23,10 @@ MOBILE_USER_AGENT = (
 )
 
 
-async def collect_page_data(url: str) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]]]:
+async def collect_page_data(
+    url: str,
+    login: Optional[ScanLoginCredentials] = None,
+) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]]]:
     """
     Returns: (screenshot_id, width, height, elements, datalayer_events)
     """
@@ -28,7 +34,10 @@ async def collect_page_data(url: str) -> Tuple[str, int, int, List[PageElement],
         browser = await p.chromium.launch(headless=True)
         try:
             page = await _new_scan_page(browser, url)
-            await page.goto(url, wait_until="load", timeout=60000)
+            if login and login.enabled:
+                await _login_hddfs(page, url, login)
+            else:
+                await page.goto(url, wait_until="load", timeout=60000)
             await page.wait_for_timeout(1500)
 
             elements = await _collect_elements(page)
@@ -112,6 +121,149 @@ async def _new_scan_page(browser: Browser, url: str) -> Page:
         )
 
     return await browser.new_page(viewport={"width": 1440, "height": 900})
+
+
+async def _login_hddfs(page: Page, target_url: str, login: ScanLoginCredentials) -> None:
+    if _is_mobile_url(target_url):
+        await _login_hddfs_mobile(page, target_url, login)
+    else:
+        await _login_hddfs_pc(page, target_url, login)
+
+    await _ensure_target_page(page, target_url)
+
+    if not await _is_logged_in(page):
+        raise RuntimeError("로그인에 실패했습니다. ID/PW 또는 추가 인증 필요 여부를 확인해주세요.")
+
+
+async def _login_hddfs_pc(page: Page, target_url: str, login: ScanLoginCredentials) -> None:
+    page.on("dialog", _accept_dialog)
+    await page.goto(target_url, wait_until="load", timeout=60000)
+    await page.wait_for_timeout(1000)
+
+    try:
+        async with page.expect_popup(timeout=10000) as popup_info:
+            await page.evaluate("(url) => login(url)", target_url)
+        login_page = await popup_info.value
+    except PlaywrightTimeoutError:
+        login_page = page
+        await page.goto(_login_url_for(target_url), wait_until="load", timeout=60000)
+
+    login_page.on("dialog", _accept_dialog)
+    await _submit_login_form(login_page, login)
+
+    if login_page is not page:
+        try:
+            await login_page.wait_for_event("close", timeout=15000)
+        except PlaywrightTimeoutError:
+            await _raise_login_error(login_page)
+
+    try:
+        await page.wait_for_load_state("load", timeout=15000)
+    except PlaywrightTimeoutError:
+        pass
+
+
+async def _login_hddfs_mobile(page: Page, target_url: str, login: ScanLoginCredentials) -> None:
+    page.on("dialog", _accept_dialog)
+    await page.goto(_login_url_for(target_url), wait_until="load", timeout=60000)
+    await _submit_login_form(page, login)
+
+    try:
+        await page.wait_for_load_state("load", timeout=15000)
+    except PlaywrightTimeoutError:
+        pass
+
+    await page.wait_for_timeout(1000)
+    if "mbshAuca/addLgin" in page.url:
+        await _raise_login_error(page)
+
+
+async def _submit_login_form(page: Page, login: ScanLoginCredentials) -> None:
+    if login.memberType == "simple":
+        form = "#frmGeneLgin"
+        user_selector = f"{form} #mbshId"
+        password_selector = f"{form} #mbshPwd"
+        button_selector = f"{form} #btnLgin2, {form} #btnLgin"
+    else:
+        form = "#frmIntgLgin"
+        user_selector = f"{form} #custId"
+        password_selector = f"{form} #custPwd"
+        button_selector = f"{form} #btnLgin1, {form} #btnLgin"
+
+    await page.wait_for_selector(user_selector, timeout=15000)
+    await page.fill(user_selector, login.username.strip())
+    await page.fill(password_selector, login.password)
+    await page.locator(button_selector).first.click()
+
+
+async def _is_logged_in(page: Page) -> bool:
+    try:
+        result = await page.evaluate("() => typeof isLogin !== 'undefined' ? Boolean(isLogin) : false")
+        if result:
+            return True
+    except Exception:
+        pass
+
+    try:
+        return await page.locator("text=로그아웃").count() > 0
+    except Exception:
+        return False
+
+
+async def _raise_login_error(page: Page) -> None:
+    for selector in ("#frmIntgLgin #pError", "#frmGeneLgin #pError", ".t_error2", ".t_error"):
+        try:
+            text = (await page.locator(selector).first.text_content(timeout=1000) or "").strip()
+            if text:
+                raise RuntimeError(text)
+        except PlaywrightTimeoutError:
+            continue
+
+    raise RuntimeError("로그인에 실패했습니다. ID/PW 또는 추가 인증 필요 여부를 확인해주세요.")
+
+
+def _login_url_for(target_url: str) -> str:
+    parsed = urlparse(target_url)
+    base = urlunparse((parsed.scheme or "https", parsed.netloc, "", "", "", ""))
+    return f"{base}/shop/mm/mbshAuca/addLgin.do?redirectUrl={quote(target_url, safe='')}"
+
+
+async def _ensure_target_page(page: Page, target_url: str) -> None:
+    try:
+        await page.wait_for_load_state("load", timeout=10000)
+    except PlaywrightTimeoutError:
+        pass
+
+    await page.wait_for_timeout(1000)
+
+    if "mbshAuca/addLgin" in page.url:
+        await _raise_login_error(page)
+
+    if _same_host(page.url, target_url) and "mbshAuca/addLgin" not in page.url:
+        return
+
+    try:
+        await page.goto(target_url, wait_until="load", timeout=60000)
+    except PlaywrightError as e:
+        if "interrupted by another navigation" not in str(e):
+            raise
+        try:
+            await page.wait_for_load_state("load", timeout=15000)
+        except PlaywrightTimeoutError:
+            pass
+
+    await page.wait_for_timeout(1000)
+
+
+def _same_host(current_url: str, target_url: str) -> bool:
+    try:
+        return (urlparse(current_url).hostname or "").lower() == (urlparse(target_url).hostname or "").lower()
+    except Exception:
+        return False
+
+
+def _accept_dialog(dialog) -> None:
+    asyncio.create_task(dialog.accept())
 
 
 def _is_mobile_url(url: str) -> bool:

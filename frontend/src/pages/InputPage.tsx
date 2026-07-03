@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { Search, Clock, ArrowRight, ArrowLeft, LayoutGrid } from 'lucide-react'
+import { Search, Clock, ArrowRight, ArrowLeft, LayoutGrid, LockKeyhole, UserRound } from 'lucide-react'
+import type { LoginMemberType, ScanStartOptions } from '../types'
 
 interface Props {
-  onStart: (url: string, fullScan: boolean) => void
+  onStart: (options: ScanStartOptions) => void
   onBack?: () => void
   layout?: 'page' | 'embedded'
 }
@@ -12,6 +13,10 @@ const HISTORY_KEY = 'htag_url_history'
 export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
   const [url, setUrl] = useState('')
   const [fullScan, setFullScan] = useState(false)
+  const [loginEnabled, setLoginEnabled] = useState(false)
+  const [memberType, setMemberType] = useState<LoginMemberType>('integrated')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [history] = useState<string[]>(() => {
     const saved = localStorage.getItem(HISTORY_KEY)
     return saved ? JSON.parse(saved).slice(0, 5) : []
@@ -20,11 +25,26 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!url.trim()) return
+    if (loginEnabled && (!username.trim() || !password)) return
+
     const normalized = url.trim().startsWith('http') ? url.trim() : `https://${url.trim()}`
     const newHistory = [normalized, ...history.filter(h => h !== normalized)].slice(0, 5)
     localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory))
-    onStart(normalized, fullScan)
+    onStart({
+      url: normalized,
+      fullScan: loginEnabled ? false : fullScan,
+      login: loginEnabled
+        ? {
+            enabled: true,
+            memberType,
+            username: username.trim(),
+            password,
+          }
+        : undefined,
+    })
   }
+
+  const isSubmitDisabled = !url.trim() || (loginEnabled && (!username.trim() || !password))
 
   const content = (
     <div className="relative z-10 mx-auto w-full max-w-2xl animate-fade-in">
@@ -64,7 +84,7 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
           </div>
           <button
             type="submit"
-            disabled={!url.trim()}
+            disabled={isSubmitDisabled}
             className="px-6 py-4 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-semibold rounded-xl flex items-center gap-2 transition-all disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
           >
             검사 시작
@@ -73,11 +93,15 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
         </div>
 
         <div
-          onClick={() => setFullScan(v => !v)}
+          onClick={() => {
+            if (!loginEnabled) setFullScan(v => !v)
+          }}
           className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-all select-none ${
             fullScan
               ? 'border-purple-700 bg-purple-900/20 text-white'
-              : 'border-[#2A2A2A] bg-[#1A1A1A] text-[#A1A1AA] hover:border-[#3A3A3A]'
+              : loginEnabled
+                ? 'border-[#2A2A2A] bg-[#151515] text-[#52525B] cursor-not-allowed'
+                : 'border-[#2A2A2A] bg-[#1A1A1A] text-[#A1A1AA] hover:border-[#3A3A3A]'
           }`}
         >
           <div className={`w-9 h-5 rounded-full relative transition-colors ${fullScan ? 'bg-purple-600' : 'bg-[#3A3A3A]'}`}>
@@ -86,8 +110,85 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
           <LayoutGrid size={16} className={fullScan ? 'text-purple-400' : 'text-[#52525B]'} />
           <div>
             <p className="text-sm font-medium">전체 온라인몰 체크</p>
-            <p className="text-xs text-[#52525B]">동일 도메인 내부 페이지를 depth 2까지 자동 스캔합니다</p>
+            <p className="text-xs text-[#52525B]">
+              {loginEnabled ? '로그인 후 검사는 단일 URL만 지원합니다' : '동일 도메인 내부 페이지를 depth 2까지 자동 스캔합니다'}
+            </p>
           </div>
+        </div>
+
+        <div
+          className={`mt-3 rounded-xl border transition-all ${
+            loginEnabled ? 'border-purple-700 bg-purple-900/10' : 'border-[#2A2A2A] bg-[#1A1A1A]'
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setLoginEnabled(v => {
+                if (!v) setFullScan(false)
+                return !v
+              })
+            }}
+            className="flex w-full items-center gap-3 px-4 py-3 text-left"
+          >
+            <div className={`w-9 h-5 rounded-full relative transition-colors ${loginEnabled ? 'bg-purple-600' : 'bg-[#3A3A3A]'}`}>
+              <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${loginEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+            </div>
+            <LockKeyhole size={16} className={loginEnabled ? 'text-purple-400' : 'text-[#52525B]'} />
+            <div>
+              <p className="text-sm font-medium text-white">로그인 후 검사</p>
+              <p className="text-xs text-[#52525B]">국문 PC/MO ID/PW 로그인 후 해당 화면을 검사합니다</p>
+            </div>
+          </button>
+
+          {loginEnabled && (
+            <div className="border-t border-[#2A2A2A] px-4 pb-4 pt-3">
+              <div className="mb-3 grid grid-cols-2 gap-2 rounded-lg bg-[#101010] p-1">
+                {[
+                  { value: 'integrated' as const, label: 'H.Point 통합회원' },
+                  { value: 'simple' as const, label: '면세점간편회원' },
+                ].map(item => (
+                  <button
+                    key={item.value}
+                    type="button"
+                    onClick={() => setMemberType(item.value)}
+                    className={`rounded-md px-3 py-2 text-sm font-medium transition-all ${
+                      memberType === item.value
+                        ? 'bg-purple-600 text-white'
+                        : 'text-[#71717A] hover:bg-white/[0.04] hover:text-white'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-2">
+                <div className="relative">
+                  <UserRound size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#52525B]" />
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={e => setUsername(e.target.value)}
+                    placeholder="아이디"
+                    autoComplete="username"
+                    className="w-full rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] px-3 py-3 pl-9 text-sm text-white placeholder-[#52525B] transition-all focus:border-purple-600 focus:outline-none focus:ring-1 focus:ring-purple-600"
+                  />
+                </div>
+                <div className="relative">
+                  <LockKeyhole size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#52525B]" />
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    placeholder="비밀번호"
+                    autoComplete="current-password"
+                    className="w-full rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] px-3 py-3 pl-9 text-sm text-white placeholder-[#52525B] transition-all focus:border-purple-600 focus:outline-none focus:ring-1 focus:ring-purple-600"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </form>
 

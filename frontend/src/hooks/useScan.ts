@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
-import type { PageScanData, ScanEventType } from '../types'
+import type { PageScanData, ScanEventType, ScanStartOptions } from '../types'
 
 export type ScanStep =
   | 'idle'
@@ -23,69 +23,100 @@ export function useScan() {
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null)
   const esRef = useRef<EventSource | null>(null)
 
-  const start = useCallback((url: string, fullScan: boolean) => {
+  const start = useCallback((options: ScanStartOptions) => {
     esRef.current?.close()
     setStep('loading')
     setError(null)
     setPages([])
     setBatchProgress(null)
 
-    const qs = new URLSearchParams({ url, fullScan: String(fullScan) })
-    const es = new EventSource(`/api/scan?${qs}`)
-    esRef.current = es
+    const openStream = (streamUrl: string) => {
+      const es = new EventSource(streamUrl)
+      let streamFinished = false
+      esRef.current = es
 
-    es.onmessage = (e) => {
-      const event: ScanEventType = JSON.parse(e.data)
+      es.onmessage = (e) => {
+        const event: ScanEventType = JSON.parse(e.data)
 
-      switch (event.type) {
-        case 'scan_start':
-          setStep('loading')
-          break
-        case 'screenshot_done':
-          setStep('screenshot')
-          break
-        case 'elements_collected':
-          setStep('collecting')
-          break
-        case 'ai_analyzing':
-          setStep('ai_analyzing')
-          break
-        case 'scan_complete':
-          setPages([event.data])
-          setStep('done')
-          es.close()
-          break
-        case 'pages_discovered':
-          setBatchProgress({ current: 0, total: event.total, currentUrl: '' })
-          break
-        case 'page_start':
-          setBatchProgress({ current: event.index, total: event.total, currentUrl: event.url })
-          setStep('ai_analyzing')
-          break
-        case 'page_complete':
-          setPages(prev => [...prev, event.data])
-          break
-        case 'batch_complete':
-          setPages(event.pages)
-          setStep('done')
-          es.close()
-          break
-        case 'error':
-          setError(event.message)
-          setStep('error')
-          es.close()
-          break
+        switch (event.type) {
+          case 'scan_start':
+            setStep('loading')
+            break
+          case 'screenshot_done':
+            setStep('screenshot')
+            break
+          case 'elements_collected':
+            setStep('collecting')
+            break
+          case 'ai_analyzing':
+            setStep('ai_analyzing')
+            break
+          case 'scan_complete':
+            setPages([event.data])
+            setStep('done')
+            streamFinished = true
+            es.close()
+            break
+          case 'pages_discovered':
+            setBatchProgress({ current: 0, total: event.total, currentUrl: '' })
+            break
+          case 'page_start':
+            setBatchProgress({ current: event.index, total: event.total, currentUrl: event.url })
+            setStep('ai_analyzing')
+            break
+          case 'page_complete':
+            setPages(prev => [...prev, event.data])
+            break
+          case 'batch_complete':
+            setPages(event.pages)
+            setStep('done')
+            streamFinished = true
+            es.close()
+            break
+          case 'error':
+            setError(event.message)
+            setStep('error')
+            streamFinished = true
+            es.close()
+            break
+        }
       }
-    }
 
-    es.onerror = () => {
-      if (step !== 'done') {
+      es.onerror = () => {
+        if (streamFinished) return
         setError('서버 연결이 끊어졌습니다.')
         setStep('error')
+        es.close()
       }
-      es.close()
     }
-  }, [step])
+
+    void (async () => {
+      try {
+        if (options.login?.enabled) {
+          const response = await fetch('/api/scan-sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(options),
+          })
+
+          if (!response.ok) {
+            const data = await response.json().catch(() => null)
+            throw new Error(data?.detail ?? '검사 세션을 생성하지 못했습니다.')
+          }
+
+          const data: { scanId: string } = await response.json()
+          openStream(`/api/scan-sessions/${data.scanId}/events`)
+          return
+        }
+
+        const qs = new URLSearchParams({ url: options.url, fullScan: String(options.fullScan) })
+        openStream(`/api/scan?${qs}`)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : '검사를 시작하지 못했습니다.')
+        setStep('error')
+      }
+    })()
+  }, [])
 
   const reset = useCallback(() => {
     esRef.current?.close()
