@@ -63,6 +63,7 @@ async def apply_click_tracking_detection(
     page: Page,
     elements: List[PageElement],
     page_url: str,
+    network_collector=None,
 ) -> List[PageElement]:
     candidates = [
         element
@@ -78,6 +79,7 @@ async def apply_click_tracking_detection(
 
         url_before = page.url
         datalayer_before = await _collect_datalayer(page)
+        network_hit_count_before = len(network_collector.get_hits()) if network_collector else 0
 
         clicked = await _click_element_by_index(page, element.element_index)
         if not clicked:
@@ -100,10 +102,13 @@ async def apply_click_tracking_detection(
             for event in new_events
             if isinstance(event, dict) and _is_ga_tracking_event(event) and not is_ignored_datalayer_event(event)
         ]
-        if not ga_events:
+
+        network_events = _collect_click_network_events(network_collector, network_hit_count_before)
+        if not ga_events and not network_events:
             continue
 
         normalized_events = [_normalize_tracking_event(event) for event in ga_events]
+        normalized_events.extend(network_events)
         element.click_tracking_events.extend(normalized_events)
         element.has_ga_tag = True
         if "click_datalayer" not in element.tracking_methods:
@@ -342,13 +347,6 @@ def _should_click_element(element: PageElement, page_url: str) -> bool:
     text = (element.text or "").strip().lower()
     if any(keyword in text for keyword in DANGEROUS_CLICK_TEXTS):
         return False
-
-    if element.element_type == "a":
-        # 링크는 페이지 이탈 가능성이 높아 제한적으로만 클릭 검증
-        if element.static_tracking_signals or element.has_ga_tag:
-            return True
-        return False
-
     return True
 
 
@@ -430,9 +428,29 @@ def _normalize_tracking_event(event: Dict[str, Any]) -> Dict[str, Any]:
     if normalized.get("event_name"):
         return normalized
 
-    if normalized.get("event") and normalized.get("event") != "ga_event":
-        normalized["event_name"] = normalized["event"]
+    raw_event = str(normalized.get("event") or "").strip()
+    if raw_event and raw_event.lower() not in {"ga_event", "ga_virtual"}:
+        normalized["event_name"] = raw_event
     return normalized
+
+
+def _collect_click_network_events(network_collector, hit_count_before: int) -> List[Dict[str, Any]]:
+    if not network_collector:
+        return []
+
+    from services.tag_classification_service import extract_ep_params, is_click_event
+
+    events: List[Dict[str, Any]] = []
+    for hit in network_collector.get_hits()[hit_count_before:]:
+        event_name = (hit.event_name or "").strip()
+        if not is_click_event(event_name):
+            continue
+        params = extract_ep_params(hit)
+        events.append({
+            "event_name": event_name,
+            **params,
+        })
+    return events
 
 
 def _has_ga_event_fields(tracking_data: Dict[str, Any]) -> bool:

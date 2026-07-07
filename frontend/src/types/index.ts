@@ -30,6 +30,9 @@ export interface NetworkTagDisplayField {
 export interface NetworkTagHit {
   event_name?: string | null
   trigger: string
+  ep_button_area?: string | null
+  ep_button_area2?: string | null
+  ep_button_name?: string | null
   display_fields: NetworkTagDisplayField[]
 }
 

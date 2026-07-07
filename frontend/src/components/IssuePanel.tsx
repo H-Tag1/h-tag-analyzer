@@ -90,7 +90,7 @@ export default function IssuePanel({
     return (
       <div className="flex flex-col items-center justify-center h-full text-[#52525B] py-16">
         <Check size={32} className="text-emerald-500 mb-3" />
-        <p className="text-sm">누락된 GA 태그가 없습니다.</p>
+        <p className="text-sm">click_ 이벤트 중 ep 파라미터 누락 태그가 없습니다.</p>
       </div>
     )
   }
@@ -136,11 +136,10 @@ export default function IssuePanel({
                 >
                   <div className="w-1.5 h-1.5 rounded-full bg-red-500 mt-1.5 flex-shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-white truncate">{item.element_text || item.element_selector}</p>
+                    <p className="text-sm text-white truncate">
+                      {tag.event_name || item.element_text || item.element_selector}
+                    </p>
                     <p className="text-xs text-[#52525B] truncate">{item.issue}</p>
-                    {!isSelected && tag.event_name && (
-                      <p className="text-[11px] text-purple-400/80 truncate mt-0.5">{tag.event_name}</p>
-                    )}
                   </div>
                   <ChevronRight
                     size={14}

@@ -59,7 +59,7 @@ async def collect_page_data(
             screenshot_id, width, height = await _take_screenshot(page)
             elements = apply_static_tracking_detection(elements)
             collector.set_trigger("click")
-            elements = await apply_click_tracking_detection(page, elements, url)
+            elements = await apply_click_tracking_detection(page, elements, url, collector)
             network_tags = collector.get_hits()
 
             return screenshot_id, width, height, elements, datalayer, network_tags
@@ -85,7 +85,7 @@ async def collect_authenticated_page_data(
         screenshot_id, width, height = await _take_screenshot(page)
         elements = apply_static_tracking_detection(elements)
         collector.set_trigger("click")
-        elements = await apply_click_tracking_detection(page, elements, url)
+        elements = await apply_click_tracking_detection(page, elements, url, collector)
         network_tags = collector.get_hits()
 
         return screenshot_id, width, height, elements, datalayer, network_tags
@@ -153,13 +153,20 @@ async def _collect_elements(page: Page, exclude_auth_actions: bool = False) -> L
             })
             .map((el, index) => {
                 const rect = el.getBoundingClientRect();
+                const scrollX = window.scrollX || window.pageXOffset || 0;
+                const scrollY = window.scrollY || window.pageYOffset || 0;
                 const staticTrackingSignals = collectSignals(el);
                 return {
                     element_index: index,
                     selector: buildSelector(el),
                     text: (el.innerText || el.value || el.title || el.getAttribute('aria-label') || '').trim().slice(0, 120),
                     element_type: el.tagName.toLowerCase(),
-                    bounding_box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+                    bounding_box: {
+                        x: rect.x + scrollX,
+                        y: rect.y + scrollY,
+                        width: rect.width,
+                        height: rect.height,
+                    },
                     static_tracking_signals: staticTrackingSignals,
                     has_ga_tag: staticTrackingSignals.length > 0,
                 };

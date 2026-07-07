@@ -1,25 +1,18 @@
 import json
 import logging
-import os
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, List, Optional
 
 from playwright.async_api import async_playwright
 
 from config import settings
-from models.scan_request import ScanLoginCredentials
 from models.page_scan_data import PageScanData
+from models.scan_request import ScanLoginCredentials
 from services.page_scan_service import (
     collect_authenticated_page_data,
     collect_page_data,
     discover_links,
     discover_links_from_page,
     prepare_authenticated_scan_page,
-)
-from services.ai_analysis_service import analyze_page
-from services.tracking_detection_service import (
-    build_tracked_items_from_elements,
-    filter_issues_by_tracked,
-    merge_tracked_items,
 )
 from services.tracking_filter_service import (
     filter_datalayer_events,
@@ -29,10 +22,9 @@ from services.tracking_filter_service import (
 )
 from services.dismissed_issue_service import filter_dismissed_issues
 from services.scan_history_service import save_scan_history
+from services.tag_classification_service import classify_network_tags
 
 logger = logging.getLogger(__name__)
-AUTH_RESULT_EVENTS = {"login", "logout", "sign_up"}
-AUTH_RESULT_TEXTS = {"로그인", "로그아웃", "회원가입"}
 
 
 async def batch_scan(
@@ -84,27 +76,15 @@ async def single_scan(
     yield json.dumps({"type": "elements_collected", "count": len(elements)})
     yield json.dumps({"type": "ai_analyzing"})
 
-    screenshot_path = os.path.join(settings.screenshot_dir, f"{screenshot_id}.png")
-    analysis = await analyze_page(screenshot_path, elements, datalayer, target_tracking_id)
-    code_tracked = build_tracked_items_from_elements(elements)
-    tracked_items = merge_tracked_items(code_tracked, analysis.tracked_items)
-    issues = filter_issues_by_tracked(analysis.issues, tracked_items)
-    if login and login.enabled:
-        issues = _exclude_auth_results(issues)
-        tracked_items = _exclude_auth_tracked(tracked_items)
-    issues = filter_dismissed_issues(issues, url)
-
-    page_data = PageScanData(
+    page_data = _assemble_page_data(
         url=url,
         screenshot_id=screenshot_id,
-        screenshot_width=width,
-        screenshot_height=height,
-        element_count=len(elements),
-        tracking_id=target_tracking_id,
-        datalayer_events=datalayer,
-        issues=issues,
-        tracked_items=tracked_items,
+        width=width,
+        height=height,
+        elements=elements,
+        datalayer=datalayer,
         network_tags=network_tags,
+        tracking_id=target_tracking_id,
     )
 
     yield json.dumps({
@@ -126,23 +106,15 @@ async def _scan_single(url: str, tracking_id: str = "G-1NWKV3S1TW") -> PageScanD
     elements, datalayer, network_tags = _apply_tracking_id_filter(
         elements, datalayer, network_tags, target_tracking_id
     )
-    screenshot_path = os.path.join(settings.screenshot_dir, f"{screenshot_id}.png")
-    analysis = await analyze_page(screenshot_path, elements, datalayer, target_tracking_id)
-    code_tracked = build_tracked_items_from_elements(elements)
-    tracked_items = merge_tracked_items(code_tracked, analysis.tracked_items)
-    issues = filter_issues_by_tracked(analysis.issues, tracked_items)
-    issues = filter_dismissed_issues(issues, url)
-    return PageScanData(
+    return _assemble_page_data(
         url=url,
         screenshot_id=screenshot_id,
-        screenshot_width=width,
-        screenshot_height=height,
-        element_count=len(elements),
-        tracking_id=target_tracking_id,
-        datalayer_events=datalayer,
-        issues=issues,
-        tracked_items=tracked_items,
+        width=width,
+        height=height,
+        elements=elements,
+        datalayer=datalayer,
         network_tags=network_tags,
+        tracking_id=target_tracking_id,
     )
 
 
@@ -188,21 +160,38 @@ async def _scan_authenticated_single(page, url: str, tracking_id: str = "G-1NWKV
     elements, datalayer, network_tags = _apply_tracking_id_filter(
         elements, datalayer, network_tags, target_tracking_id
     )
-    screenshot_path = os.path.join(settings.screenshot_dir, f"{screenshot_id}.png")
-    analysis = await analyze_page(screenshot_path, elements, datalayer, target_tracking_id)
-    code_tracked = build_tracked_items_from_elements(elements)
-    tracked_items = merge_tracked_items(code_tracked, analysis.tracked_items)
-    issues = filter_issues_by_tracked(analysis.issues, tracked_items)
-    issues = _exclude_auth_results(issues)
-    tracked_items = _exclude_auth_tracked(tracked_items)
+    return _assemble_page_data(
+        url=url,
+        screenshot_id=screenshot_id,
+        width=width,
+        height=height,
+        elements=elements,
+        datalayer=datalayer,
+        network_tags=network_tags,
+        tracking_id=target_tracking_id,
+    )
+
+
+def _assemble_page_data(
+    url: str,
+    screenshot_id: str,
+    width: int,
+    height: int,
+    elements: List,
+    datalayer: list,
+    network_tags: list,
+    tracking_id: str,
+) -> PageScanData:
+    tracked_items, issues = classify_network_tags(network_tags, elements)
     issues = filter_dismissed_issues(issues, url)
+
     return PageScanData(
         url=url,
         screenshot_id=screenshot_id,
         screenshot_width=width,
         screenshot_height=height,
         element_count=len(elements),
-        tracking_id=target_tracking_id,
+        tracking_id=tracking_id,
         datalayer_events=datalayer,
         issues=issues,
         tracked_items=tracked_items,
@@ -218,41 +207,13 @@ def _apply_tracking_id_filter(elements, datalayer, network_tags, tracking_id):
     )
 
 
-def _exclude_auth_results(issues):
-    return [
-        issue
-        for issue in issues
-        if not _is_auth_result(issue)
-    ]
-
-
-def _exclude_auth_tracked(tracked_items):
-    return [
-        item
-        for item in tracked_items
-        if not _is_auth_tracked(item)
-    ]
-
-
-def _is_auth_tracked(item) -> bool:
-    event_name = item.tracking_data.get("event") if isinstance(item.tracking_data, dict) else None
-    text = (item.element_text or "").strip()
-    selector = (item.element_selector or "").strip()
-
-    if event_name in AUTH_RESULT_EVENTS:
-        return True
-    if text in AUTH_RESULT_TEXTS:
-        return True
-    return selector == "#loginBtn" or "menu_login_join" in selector
-
-
-def _is_auth_result(issue) -> bool:
-    event_name = issue.recommended_ga_spec.get("event") if isinstance(issue.recommended_ga_spec, dict) else None
-    text = (issue.element_text or "").strip()
-    selector = (issue.element_selector or "").strip()
-
-    if event_name in AUTH_RESULT_EVENTS:
-        return True
-    if text in AUTH_RESULT_TEXTS:
-        return True
-    return selector == "#loginBtn" or "menu_login_join" in selector
+def _persist_batch_history(url: str, pages: list, tracking_id: str) -> str:
+    page_models = [PageScanData(**page) for page in pages]
+    record = save_scan_history(
+        url=url,
+        mode="batch",
+        full_scan=True,
+        tracking_id=tracking_id,
+        pages=page_models,
+    )
+    return record.id

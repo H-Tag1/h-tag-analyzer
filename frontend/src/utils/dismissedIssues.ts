@@ -2,7 +2,8 @@ import type { AiAnalysisItem } from '../types'
 import type { TagSpec } from './tagSpec'
 
 export function issueIdentityKey(issue: AiAnalysisItem): string {
-  return `${issue.element_selector.trim()}|${issue.element_text.trim()}`
+  const eventName = String(issue.recommended_ga_spec?.event_name ?? issue.element_selector ?? '').trim()
+  return eventName || `${issue.element_selector.trim()}|${issue.element_text.trim()}`
 }
 
 export async function dismissIssue(

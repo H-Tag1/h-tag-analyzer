@@ -96,6 +96,9 @@ def _parse_analytics_request(request: Request, trigger: str) -> Optional[Network
     if is_ignored_ga_event_name(event_name):
         return None
 
+    ep_button_area = _extract_ep_param(params, "ep_button_area")
+    ep_button_area2 = _extract_ep_param(params, "ep_button_area2")
+    ep_button_name = _extract_ep_param(params, "ep_button_name")
     display_fields = _build_display_fields(params, url)
 
     if not event_name and not display_fields:
@@ -104,9 +107,26 @@ def _parse_analytics_request(request: Request, trigger: str) -> Optional[Network
     return NetworkTagHit(
         event_name=event_name,
         trigger=trigger,
+        ep_button_area=ep_button_area,
+        ep_button_area2=ep_button_area2,
+        ep_button_name=ep_button_name,
         display_fields=display_fields,
         tid=tid,
     )
+
+
+def _extract_ep_param(params: Dict[str, Any], field_name: str) -> Optional[str]:
+    candidates = (
+        f"ep.{field_name}",
+        f"ep.{field_name.replace('ep_', '')}",
+        field_name,
+        field_name.replace("ep_", ""),
+    )
+    for key in candidates:
+        value = _as_str(params.get(key))
+        if value:
+            return value
+    return None
 
 
 def _build_display_fields(params: Dict[str, Any], request_url: str) -> List[NetworkTagDisplayField]:

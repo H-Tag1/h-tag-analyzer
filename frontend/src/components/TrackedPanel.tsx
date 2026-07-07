@@ -1,5 +1,6 @@
 import { Check } from 'lucide-react'
 import type { TrackedAnalysisItem } from '../types'
+import TagParamsTable from './TagParamsTable'
 import { normalizeTagSpec } from '../utils/tagSpec'
 
 interface Props {
@@ -8,40 +9,12 @@ interface Props {
   onSelect: (index: number) => void
 }
 
-const TRACKING_FIELDS = [
-  { key: 'event_name' as const, label: '추천 태그' },
-  { key: 'ep_button_area' as const, label: 'ep_button_area' },
-  { key: 'ep_button_area2' as const, label: 'ep_button_area2' },
-  { key: 'ep_button_name' as const, label: 'ep_button_name' },
-]
-
-function TrackingParamsTable({ trackingData }: { trackingData: Record<string, unknown> }) {
-  const params = normalizeTagSpec(trackingData)
-
-  return (
-    <table className="w-full text-xs border-collapse">
-      <tbody>
-        {TRACKING_FIELDS.map(({ key, label }) => (
-          <tr key={key} className="border-b border-[#2A2A2A]/60 last:border-0">
-            <td className="py-1.5 pr-2 text-[#52525B] whitespace-nowrap align-top font-mono">
-              {label}
-            </td>
-            <td className="py-1.5 text-white break-all">
-              {params[key] || <span className="text-[#52525B]">-</span>}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  )
-}
-
 export default function TrackedPanel({ trackedItems, selectedIndex, onSelect }: Props) {
   if (trackedItems.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-[#52525B] py-16">
         <Check size={32} className="text-[#52525B] mb-3" />
-        <p className="text-sm">정상 트래킹된 태그가 없습니다.</p>
+        <p className="text-sm">click_ 이벤트 중 ep 파라미터가 모두 있는 태그가 없습니다.</p>
       </div>
     )
   }
@@ -52,7 +25,7 @@ export default function TrackedPanel({ trackedItems, selectedIndex, onSelect }: 
         {trackedItems.map((item, idx) => {
           const isSelected = selectedIndex === idx
           const params = normalizeTagSpec(item.tracking_data)
-          const title = item.element_text || params.ep_button_name || params.ep_button_area
+          const title = params.event_name || item.element_text || params.ep_button_name
 
           return (
             <div
@@ -69,7 +42,7 @@ export default function TrackedPanel({ trackedItems, selectedIndex, onSelect }: 
                     {title && (
                       <p className="text-sm text-white truncate mb-2">{title}</p>
                     )}
-                    <TrackingParamsTable trackingData={item.tracking_data} />
+                    <TagParamsTable trackingData={item.tracking_data} />
                   </div>
                 </div>
               </button>

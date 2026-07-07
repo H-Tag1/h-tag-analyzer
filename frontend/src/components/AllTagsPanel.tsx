@@ -12,26 +12,47 @@ function triggerLabel(trigger: string): string {
   return trigger === 'click' ? '클릭' : '페이지 로드'
 }
 
-export default function NetworkTagsPanel({ networkTags, selectedIndex, onSelect }: Props) {
-  const [filter, setFilter] = useState<'all' | 'page_load' | 'click'>('all')
+function eventCategory(eventName?: string | null): string {
+  const name = (eventName || '').toLowerCase()
+  if (name.startsWith('click_')) return '클릭'
+  if (name.includes('purchase') || name.includes('cart') || name.includes('checkout') || name.startsWith('view_item')) {
+    return '전자상거래'
+  }
+  if (name === 'page_view' || name === 'session_start') return '페이지'
+  return '기타'
+}
+
+export default function AllTagsPanel({ networkTags, selectedIndex, onSelect }: Props) {
+  const [filter, setFilter] = useState<'all' | 'click' | 'page' | 'ecommerce'>('all')
 
   const filtered = networkTags
     .map((tag, index) => ({ tag, index }))
-    .filter(({ tag }) => filter === 'all' || tag.trigger === filter)
+    .filter(({ tag }) => {
+      if (filter === 'all') return true
+      const category = eventCategory(tag.event_name)
+      if (filter === 'click') return category === '클릭'
+      if (filter === 'page') return category === '페이지'
+      return category === '전자상거래'
+    })
 
   if (networkTags.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-[#52525B] py-16 px-4">
         <Radio size={32} className="text-[#52525B] mb-3" />
-        <p className="text-sm text-center">수집된 GA4 네트워크 태그가 없습니다.</p>
+        <p className="text-sm text-center">수집된 GA4 태그가 없습니다.</p>
       </div>
     )
   }
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex gap-1 px-3 py-2 border-b border-[#2A2A2A]">
-        {(['all', 'page_load', 'click'] as const).map(value => (
+      <div className="flex flex-wrap gap-1 px-3 py-2 border-b border-[#2A2A2A]">
+        {([
+          ['all', `전체 (${networkTags.length})`],
+          ['click', '클릭'],
+          ['page', '페이지'],
+          ['ecommerce', '전자상거래'],
+        ] as const).map(([value, label]) => (
           <button
             key={value}
             onClick={() => setFilter(value)}
@@ -41,7 +62,7 @@ export default function NetworkTagsPanel({ networkTags, selectedIndex, onSelect 
                 : 'text-[#52525B] hover:text-[#A1A1AA]'
             }`}
           >
-            {value === 'all' ? `전체 (${networkTags.length})` : value === 'page_load' ? '로드' : '클릭'}
+            {label}
           </button>
         ))}
       </div>
@@ -49,6 +70,7 @@ export default function NetworkTagsPanel({ networkTags, selectedIndex, onSelect 
       <div className="flex-1 overflow-y-auto">
         {filtered.map(({ tag, index: originalIndex }) => {
           const isSelected = selectedIndex === originalIndex
+          const category = eventCategory(tag.event_name)
 
           return (
             <div
@@ -64,7 +86,9 @@ export default function NetworkTagsPanel({ networkTags, selectedIndex, onSelect 
                   <p className="text-sm text-white truncate">
                     {tag.event_name || '(이름 없음)'}
                   </p>
-                  <p className="text-xs text-[#52525B] truncate">{triggerLabel(tag.trigger)}</p>
+                  <p className="text-xs text-[#52525B] truncate">
+                    {category} · {triggerLabel(tag.trigger)}
+                  </p>
                 </div>
                 <ChevronRight
                   size={14}
@@ -74,6 +98,20 @@ export default function NetworkTagsPanel({ networkTags, selectedIndex, onSelect 
 
               {isSelected && (
                 <div className="px-4 pb-4 animate-fade-in">
+                  {(tag.ep_button_area || tag.ep_button_area2 || tag.ep_button_name) && (
+                    <dl className="space-y-2 mb-3 pb-3 border-b border-[#2A2A2A]">
+                      {[
+                        ['ep_button_area', tag.ep_button_area],
+                        ['ep_button_area2', tag.ep_button_area2],
+                        ['ep_button_name', tag.ep_button_name],
+                      ].map(([label, value]) => value ? (
+                        <div key={label}>
+                          <dt className="text-[11px] text-[#52525B] font-mono">{label}</dt>
+                          <dd className="text-xs text-[#E4E4E7] break-all mt-0.5">{value}</dd>
+                        </div>
+                      ) : null)}
+                    </dl>
+                  )}
                   <dl className="space-y-2">
                     {tag.display_fields.map(field => (
                       <div key={field.label}>

@@ -4,7 +4,7 @@ import type { AiAnalysisItem, GeneratedCodeSnapshot, PageScanData } from '../typ
 import ScreenshotOverlay from '../components/ScreenshotOverlay'
 import IssuePanel from '../components/IssuePanel'
 import TrackedPanel from '../components/TrackedPanel'
-import NetworkTagsPanel from '../components/NetworkTagsPanel'
+import AllTagsPanel from '../components/AllTagsPanel'
 import { dismissIssue, issueIdentityKey } from '../utils/dismissedIssues'
 import { getSavedCodeForPage } from '../utils/scanHistory'
 import type { TagSpec } from '../utils/tagSpec'
@@ -19,7 +19,7 @@ interface Props {
   onGeneratedCodesChange?: (codes: GeneratedCodeSnapshot[]) => void
 }
 
-type PanelTab = 'missing' | 'tracked' | 'network'
+type PanelTab = 'missing' | 'tracked' | 'all'
 
 export default function AnalysisPage({
   pages,
@@ -34,7 +34,7 @@ export default function AnalysisPage({
   const [panelTab, setPanelTab] = useState<PanelTab>('missing')
   const [selectedIssue, setSelectedIssue] = useState<number | null>(null)
   const [selectedTracked, setSelectedTracked] = useState<number | null>(null)
-  const [selectedNetwork, setSelectedNetwork] = useState<number | null>(null)
+  const [selectedAll, setSelectedAll] = useState<number | null>(null)
   const [sessionDismissedKeys, setSessionDismissedKeys] = useState<Set<string>>(new Set())
 
   const current = pages[pageIdx]
@@ -50,7 +50,7 @@ export default function AnalysisPage({
     setPageIdx(idx)
     setSelectedIssue(null)
     setSelectedTracked(null)
-    setSelectedNetwork(null)
+    setSelectedAll(null)
     setSessionDismissedKeys(new Set())
   }
 
@@ -124,7 +124,7 @@ export default function AnalysisPage({
         <div className="flex items-center gap-3 text-xs text-[#52525B]">
           <span className="font-mono text-purple-400">{current.tracking_id ?? 'G-1NWKV3S1TW'}</span>
           <span>요소 {current.element_count}개</span>
-          <span className="text-blue-400 font-medium">네트워크 {networkTags.length}건</span>
+          <span className="text-blue-400 font-medium">전체 {networkTags.length}건</span>
           <span className="text-emerald-400 font-medium">정상 {trackedItems.length}건</span>
           <span className="text-red-400 font-medium">누락 {visibleIssues.length}건</span>
         </div>
@@ -190,14 +190,14 @@ export default function AnalysisPage({
         <div className="w-80 flex-shrink-0 border-l border-[#2A2A2A] bg-[#111] flex flex-col overflow-hidden">
           <div className="flex border-b border-[#2A2A2A]">
             <button
-              onClick={() => setPanelTab('network')}
+              onClick={() => setPanelTab('all')}
               className={`flex-1 px-3 py-2.5 text-xs font-medium transition-colors ${
-                panelTab === 'network'
+                panelTab === 'all'
                   ? 'text-white border-b-2 border-blue-400'
                   : 'text-[#52525B] hover:text-[#A1A1AA]'
               }`}
             >
-              네트워크 ({networkTags.length})
+              전체 ({networkTags.length})
             </button>
             <button
               onClick={() => setPanelTab('missing')}
@@ -221,11 +221,11 @@ export default function AnalysisPage({
             </button>
           </div>
 
-          {panelTab === 'network' ? (
-            <NetworkTagsPanel
+          {panelTab === 'all' ? (
+            <AllTagsPanel
               networkTags={networkTags}
-              selectedIndex={selectedNetwork}
-              onSelect={idx => setSelectedNetwork(prev => (prev === idx ? null : idx))}
+              selectedIndex={selectedAll}
+              onSelect={idx => setSelectedAll(prev => (prev === idx ? null : idx))}
             />
           ) : panelTab === 'missing' ? (
             <IssuePanel
