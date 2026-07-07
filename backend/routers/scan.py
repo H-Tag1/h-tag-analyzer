@@ -15,14 +15,14 @@ _scan_sessions: dict[str, tuple[float, ScanStartRequest]] = {}
 
 
 @router.get("/scan")
-async def scan(url: str, fullScan: bool = False):
+async def scan(url: str, fullScan: bool = False, trackingId: str = "G-1NWKV3S1TW"):
     async def generator():
         try:
             if fullScan:
-                async for event in batch_scan(url):
+                async for event in batch_scan(url, tracking_id=trackingId):
                     yield {"data": event}
             else:
-                async for event in single_scan(url):
+                async for event in single_scan(url, tracking_id=trackingId):
                     yield {"data": event}
         except Exception as e:
             logger.error(f"Scan error: {e}", exc_info=True)
@@ -58,10 +58,10 @@ async def scan_session_events(scan_id: str):
     async def generator():
         try:
             if payload.fullScan:
-                async for event in batch_scan(payload.url, payload.login):
+                async for event in batch_scan(payload.url, payload.login, payload.trackingId):
                     yield {"data": event}
             else:
-                async for event in single_scan(payload.url, payload.login):
+                async for event in single_scan(payload.url, payload.login, payload.trackingId):
                     yield {"data": event}
         except Exception as e:
             logger.error(f"Scan error: {e}", exc_info=True)

@@ -1,17 +1,20 @@
 import { useState } from 'react'
 import './index.css'
-import MainPage from './pages/MainPage'
+import MainPage, { type MainSection } from './pages/MainPage'
 import ScanningPage from './pages/ScanningPage'
 import AnalysisPage from './pages/AnalysisPage'
+import HistoryDetailPage from './pages/HistoryDetailPage'
 import { useScan } from './hooks/useScan'
 import type { ScanStartOptions } from './types'
 
-type Screen = 'main' | 'scanning' | 'results'
+type Screen = 'main' | 'scanning' | 'results' | 'history-detail'
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('main')
   const [targetUrl, setTargetUrl] = useState('')
-  const { step, error, pages, batchProgress, start, reset } = useScan()
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null)
+  const [mainSection, setMainSection] = useState<MainSection>('scan')
+  const { step, error, pages, historyId, batchProgress, start, reset } = useScan()
 
   const handleStart = (options: ScanStartOptions) => {
     setTargetUrl(options.url)
@@ -25,10 +28,33 @@ export default function App() {
     setScreen('main')
   }
 
-  if (screen === 'main') return <MainPage onScanStart={handleStart} />
+  const handleOpenHistoryDetail = (id: string) => {
+    setSelectedHistoryId(id)
+    setScreen('history-detail')
+  }
+
+  const handleHistoryDetailBack = () => {
+    setSelectedHistoryId(null)
+    setMainSection('report')
+    setScreen('main')
+  }
+
+  if (screen === 'main') {
+    return (
+      <MainPage
+        onScanStart={handleStart}
+        onOpenHistoryDetail={handleOpenHistoryDetail}
+        initialSection={mainSection}
+      />
+    )
+  }
+
+  if (screen === 'history-detail' && selectedHistoryId) {
+    return <HistoryDetailPage historyId={selectedHistoryId} onBack={handleHistoryDetailBack} />
+  }
 
   if ((screen === 'scanning' || screen === 'results') && step === 'done' && pages.length > 0) {
-    return <AnalysisPage pages={pages} onBack={handleScanBack} />
+    return <AnalysisPage pages={pages} onBack={handleScanBack} historyId={historyId} />
   }
 
   if (screen === 'scanning') {

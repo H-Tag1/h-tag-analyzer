@@ -13,14 +13,37 @@ export interface AiAnalysisItem {
   recommended_ga_spec: Record<string, unknown>
 }
 
+export interface TrackedAnalysisItem {
+  element_selector: string
+  element_text: string
+  bounding_box: BoundingBox
+  tracking_description: string
+  tracking_data: Record<string, unknown>
+  detection_methods?: string[]
+}
+
+export interface NetworkTagDisplayField {
+  label: string
+  value: string
+}
+
+export interface NetworkTagHit {
+  event_name?: string | null
+  trigger: string
+  display_fields: NetworkTagDisplayField[]
+}
+
 export interface PageScanData {
   url: string
   screenshot_id: string
   screenshot_width: number
   screenshot_height: number
   element_count: number
+  tracking_id?: string
   datalayer_events: Record<string, unknown>[]
   issues: AiAnalysisItem[]
+  tracked_items: TrackedAnalysisItem[]
+  network_tags?: NetworkTagHit[]
 }
 
 export type ScanMode = 'single' | 'batch'
@@ -37,7 +60,35 @@ export interface ScanLoginCredentials {
 export interface ScanStartOptions {
   url: string
   fullScan: boolean
+  trackingId: string
   login?: ScanLoginCredentials
+}
+
+export const DEFAULT_TRACKING_ID = 'G-1NWKV3S1TW'
+
+export interface GeneratedCodeSnapshot {
+  page_url: string
+  code: string
+  issue_count: number
+  generated_at: string
+}
+
+export interface ScanHistorySummary {
+  id: string
+  url: string
+  mode: ScanMode
+  full_scan: boolean
+  tracking_id: string
+  page_count: number
+  issue_count: number
+  tracked_count: number
+  has_generated_code: boolean
+  created_at: string
+}
+
+export interface ScanHistoryRecord extends ScanHistorySummary {
+  pages: PageScanData[]
+  generated_codes: GeneratedCodeSnapshot[]
 }
 
 export type ScanEventType =
@@ -45,10 +96,10 @@ export type ScanEventType =
   | { type: 'screenshot_done'; screenshotId: string; width: number; height: number }
   | { type: 'elements_collected'; count: number }
   | { type: 'ai_analyzing' }
-  | { type: 'scan_complete'; data: PageScanData }
+  | { type: 'scan_complete'; data: PageScanData; history_id?: string }
   | { type: 'pages_discovered'; urls: string[]; total: number }
   | { type: 'page_start'; url: string; index: number; total: number }
   | { type: 'page_complete'; url: string; index: number; data: PageScanData }
   | { type: 'page_error'; url: string; message: string }
-  | { type: 'batch_complete'; pages: PageScanData[] }
+  | { type: 'batch_complete'; pages: PageScanData[]; history_id?: string }
   | { type: 'error'; message: string }

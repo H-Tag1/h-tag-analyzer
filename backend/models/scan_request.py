@@ -13,4 +13,5 @@ class ScanLoginCredentials(BaseModel):
 class ScanStartRequest(BaseModel):
     url: str
     fullScan: bool = False
+    trackingId: str = "G-1NWKV3S1TW"
     login: Optional[ScanLoginCredentials] = None

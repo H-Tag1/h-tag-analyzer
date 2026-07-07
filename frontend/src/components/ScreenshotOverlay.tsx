@@ -1,21 +1,27 @@
 import { useRef, useEffect, useState } from 'react'
-import type { AiAnalysisItem } from '../types'
+import type { AiAnalysisItem, TrackedAnalysisItem } from '../types'
 
 interface Props {
   screenshotId: string
   originalWidth: number
   originalHeight: number
   issues: AiAnalysisItem[]
-  selectedIndex: number | null
-  onSelect: (index: number) => void
+  trackedItems: TrackedAnalysisItem[]
+  selectedIssueIndex: number | null
+  selectedTrackedIndex: number | null
+  onSelectIssue: (index: number) => void
+  onSelectTracked: (index: number) => void
 }
 
 export default function ScreenshotOverlay({
   screenshotId,
   originalWidth,
   issues,
-  selectedIndex,
-  onSelect,
+  trackedItems,
+  selectedIssueIndex,
+  selectedTrackedIndex,
+  onSelectIssue,
+  onSelectTracked,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [scale, setScale] = useState(1)
@@ -50,14 +56,45 @@ export default function ScreenshotOverlay({
         }}
       />
 
-      {issues.map((item, i) => {
+      {trackedItems.map((item, i) => {
         const { x, y, width, height } = item.bounding_box
-        const isSelected = selectedIndex === i
+        const isSelected = selectedTrackedIndex === i
 
         return (
           <div
-            key={i}
-            onClick={() => onSelect(i)}
+            key={`tracked-${i}`}
+            onClick={() => onSelectTracked(i)}
+            title={item.tracking_description}
+            style={{
+              position: 'absolute',
+              left: x * scale,
+              top: y * scale,
+              width: width * scale,
+              height: height * scale,
+            }}
+            className={`cursor-pointer rounded transition-all ${
+              isSelected
+                ? 'bg-emerald-500/30 border-2 border-emerald-400 shadow-lg shadow-emerald-900/40'
+                : 'bg-emerald-500/15 border border-emerald-500/60 hover:bg-emerald-500/25'
+            }`}
+          >
+            {isSelected && (
+              <span className="absolute -top-5 left-0 text-xs text-emerald-400 bg-[#1A1A1A] px-1 rounded whitespace-nowrap max-w-[200px] truncate">
+                {item.element_text || item.element_selector}
+              </span>
+            )}
+          </div>
+        )
+      })}
+
+      {issues.map((item, i) => {
+        const { x, y, width, height } = item.bounding_box
+        const isSelected = selectedIssueIndex === i
+
+        return (
+          <div
+            key={`issue-${i}`}
+            onClick={() => onSelectIssue(i)}
             title={item.issue}
             style={{
               position: 'absolute',

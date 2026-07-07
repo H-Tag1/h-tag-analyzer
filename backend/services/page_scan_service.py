@@ -8,9 +8,16 @@ from urllib.parse import quote, urlparse, urlunparse
 from PIL import Image
 from playwright.async_api import Browser, Error as PlaywrightError, Page, TimeoutError as PlaywrightTimeoutError, async_playwright
 
+from services.tracking_detection_service import (
+    apply_click_tracking_detection,
+    apply_static_tracking_detection,
+    parse_static_signals,
+)
+from services.network_tag_service import NetworkTagCollector
 from config import settings
 from models.page_element import PageElement
 from models.bounding_box import BoundingBox
+from models.network_tag_hit import NetworkTagHit
 from models.scan_request import ScanLoginCredentials
 
 logger = logging.getLogger(__name__)
@@ -28,41 +35,62 @@ AUTH_EXCLUDED_TEXTS = {"로그인", "로그아웃", "회원가입"}
 async def collect_page_data(
     url: str,
     login: Optional[ScanLoginCredentials] = None,
-) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]]]:
+) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]], List[NetworkTagHit]]:
     """
-    Returns: (screenshot_id, width, height, elements, datalayer_events)
+    Returns: (screenshot_id, width, height, elements, datalayer_events, network_tags)
     """
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
+        collector: Optional[NetworkTagCollector] = None
         try:
             page = await _new_scan_page(browser, url)
+            collector = NetworkTagCollector(page)
+            await collector.start()
+
             if login and login.enabled:
                 await _login_hddfs(page, url, login)
             else:
                 await page.goto(url, wait_until="load", timeout=60000)
             await page.wait_for_timeout(1500)
+            collector.reset()
 
             elements = await _collect_elements(page, exclude_auth_actions=bool(login and login.enabled))
             datalayer = await _collect_datalayer(page)
             screenshot_id, width, height = await _take_screenshot(page)
+            elements = apply_static_tracking_detection(elements)
+            collector.set_trigger("click")
+            elements = await apply_click_tracking_detection(page, elements, url)
+            network_tags = collector.get_hits()
 
-            return screenshot_id, width, height, elements, datalayer
+            return screenshot_id, width, height, elements, datalayer, network_tags
         finally:
+            if collector:
+                await collector.stop()
             await browser.close()
 
 
 async def collect_authenticated_page_data(
     page: Page,
     url: str,
-) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]]]:
-    await _goto_scan_target(page, url)
-    await page.wait_for_timeout(1500)
+) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]], List[NetworkTagHit]]:
+    collector = NetworkTagCollector(page)
+    await collector.start()
+    try:
+        await _goto_scan_target(page, url)
+        await page.wait_for_timeout(1500)
+        collector.reset()
 
-    elements = await _collect_elements(page, exclude_auth_actions=True)
-    datalayer = await _collect_datalayer(page)
-    screenshot_id, width, height = await _take_screenshot(page)
+        elements = await _collect_elements(page, exclude_auth_actions=True)
+        datalayer = await _collect_datalayer(page)
+        screenshot_id, width, height = await _take_screenshot(page)
+        elements = apply_static_tracking_detection(elements)
+        collector.set_trigger("click")
+        elements = await apply_click_tracking_detection(page, elements, url)
+        network_tags = collector.get_hits()
 
-    return screenshot_id, width, height, elements, datalayer
+        return screenshot_id, width, height, elements, datalayer, network_tags
+    finally:
+        await collector.stop()
 
 
 async def prepare_authenticated_scan_page(browser: Browser, url: str, login: ScanLoginCredentials) -> Page:
@@ -73,25 +101,67 @@ async def prepare_authenticated_scan_page(browser: Browser, url: str, login: Sca
 
 async def _collect_elements(page: Page, exclude_auth_actions: bool = False) -> List[PageElement]:
     raw = await page.evaluate("""() => {
+        const TRACKING_ATTR_PREFIXES = ['data-gtm', 'data-ga', 'data-analytics', 'data-track', 'data-event'];
+        const TRACKING_ATTR_EXACT = ['data-category', 'data-action', 'data-label', 'data-ecommerce'];
+
+        function collectSignals(el) {
+            const signals = [];
+            let node = el;
+            for (let depth = 0; depth < 6 && node; depth++) {
+                for (const attr of Array.from(node.attributes || [])) {
+                    const name = attr.name.toLowerCase();
+                    if (
+                        TRACKING_ATTR_PREFIXES.some(prefix => name.startsWith(prefix)) ||
+                        TRACKING_ATTR_EXACT.includes(name)
+                    ) {
+                        signals.push({
+                            type: 'attribute',
+                            name: attr.name,
+                            value: attr.value,
+                            depth,
+                        });
+                    }
+                }
+
+                const onclick = node.getAttribute('onclick') || '';
+                if (onclick && /gtag\\s*\\(|dataLayer\\.push|ga\\s*\\(|google_analytics/i.test(onclick)) {
+                    signals.push({
+                        type: 'onclick',
+                        value: onclick.slice(0, 800),
+                        depth,
+                    });
+                }
+
+                node = node.parentElement;
+            }
+            return signals;
+        }
+
+        function buildSelector(el) {
+            if (el.id) return '#' + CSS.escape(el.id);
+            if (el.className && typeof el.className === 'string') {
+                const cls = el.className.trim().split(/\\s+/)[0];
+                if (cls) return el.tagName.toLowerCase() + '.' + CSS.escape(cls);
+            }
+            return el.tagName.toLowerCase();
+        }
+
         return Array.from(document.querySelectorAll('button, a, [onclick], input[type="submit"], input[type="button"]'))
             .filter(el => {
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0 && rect.top >= 0;
             })
-            .map(el => {
-                let selector = el.tagName.toLowerCase();
-                if (el.id) selector = '#' + el.id;
-                else if (el.className && typeof el.className === 'string') {
-                    const cls = el.className.trim().split(/\\s+/)[0];
-                    if (cls) selector = el.tagName.toLowerCase() + '.' + cls;
-                }
+            .map((el, index) => {
                 const rect = el.getBoundingClientRect();
+                const staticTrackingSignals = collectSignals(el);
                 return {
-                    selector,
-                    text: (el.innerText || el.value || el.title || '').trim().slice(0, 120),
+                    element_index: index,
+                    selector: buildSelector(el),
+                    text: (el.innerText || el.value || el.title || el.getAttribute('aria-label') || '').trim().slice(0, 120),
                     element_type: el.tagName.toLowerCase(),
                     bounding_box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-                    has_ga_tag: false
+                    static_tracking_signals: staticTrackingSignals,
+                    has_ga_tag: staticTrackingSignals.length > 0,
                 };
             })
             .slice(0, 200);
@@ -108,7 +178,9 @@ async def _collect_elements(page: Page, exclude_auth_actions: bool = False) -> L
             text=item.get("text") or None,
             element_type=item["element_type"],
             bounding_box=BoundingBox(**bb_data) if bb_data else None,
+            element_index=item.get("element_index", 0),
             has_ga_tag=item.get("has_ga_tag", False),
+            static_tracking_signals=parse_static_signals(item.get("static_tracking_signals", [])),
         ))
     return elements
 

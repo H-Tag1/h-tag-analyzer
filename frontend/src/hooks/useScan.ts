@@ -20,6 +20,7 @@ export function useScan() {
   const [step, setStep] = useState<ScanStep>('idle')
   const [error, setError] = useState<string | null>(null)
   const [pages, setPages] = useState<PageScanData[]>([])
+  const [historyId, setHistoryId] = useState<string | null>(null)
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null)
   const esRef = useRef<EventSource | null>(null)
 
@@ -28,6 +29,7 @@ export function useScan() {
     setStep('loading')
     setError(null)
     setPages([])
+    setHistoryId(null)
     setBatchProgress(null)
 
     const openStream = (streamUrl: string) => {
@@ -53,6 +55,7 @@ export function useScan() {
             break
           case 'scan_complete':
             setPages([event.data])
+            setHistoryId(event.history_id ?? null)
             setStep('done')
             streamFinished = true
             es.close()
@@ -69,6 +72,7 @@ export function useScan() {
             break
           case 'batch_complete':
             setPages(event.pages)
+            setHistoryId(event.history_id ?? null)
             setStep('done')
             streamFinished = true
             es.close()
@@ -109,7 +113,11 @@ export function useScan() {
           return
         }
 
-        const qs = new URLSearchParams({ url: options.url, fullScan: String(options.fullScan) })
+        const qs = new URLSearchParams({
+          url: options.url,
+          fullScan: String(options.fullScan),
+          trackingId: options.trackingId,
+        })
         openStream(`/api/scan?${qs}`)
       } catch (e) {
         setError(e instanceof Error ? e.message : '검사를 시작하지 못했습니다.')
@@ -123,8 +131,9 @@ export function useScan() {
     setStep('idle')
     setError(null)
     setPages([])
+    setHistoryId(null)
     setBatchProgress(null)
   }, [])
 
-  return { step, error, pages, batchProgress, start, reset }
+  return { step, error, pages, historyId, batchProgress, start, reset }
 }

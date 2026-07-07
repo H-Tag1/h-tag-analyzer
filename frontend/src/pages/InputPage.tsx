@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Search, Clock, ArrowRight, ArrowLeft, LayoutGrid, LockKeyhole, UserRound } from 'lucide-react'
+import { Search, Clock, ArrowRight, ArrowLeft, LayoutGrid, LockKeyhole, UserRound, Tag } from 'lucide-react'
 import type { LoginMemberType, ScanStartOptions } from '../types'
+import { DEFAULT_TRACKING_ID } from '../types'
 
 interface Props {
   onStart: (options: ScanStartOptions) => void
@@ -12,6 +13,7 @@ const HISTORY_KEY = 'htag_url_history'
 
 export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
   const [url, setUrl] = useState('')
+  const [trackingId, setTrackingId] = useState(DEFAULT_TRACKING_ID)
   const [fullScan, setFullScan] = useState(false)
   const [loginEnabled, setLoginEnabled] = useState(false)
   const [memberType, setMemberType] = useState<LoginMemberType>('integrated')
@@ -25,6 +27,7 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!url.trim()) return
+    if (!trackingId.trim()) return
     if (loginEnabled && (!username.trim() || !password)) return
 
     const normalized = url.trim().startsWith('http') ? url.trim() : `https://${url.trim()}`
@@ -33,6 +36,7 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
     onStart({
       url: normalized,
       fullScan,
+      trackingId: trackingId.trim().toUpperCase(),
       login: loginEnabled
         ? {
             enabled: true,
@@ -44,7 +48,7 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
     })
   }
 
-  const isSubmitDisabled = !url.trim() || (loginEnabled && (!username.trim() || !password))
+  const isSubmitDisabled = !url.trim() || !trackingId.trim() || (loginEnabled && (!username.trim() || !password))
 
   const content = (
     <div className="relative z-10 mx-auto w-full max-w-2xl animate-fade-in">
@@ -90,6 +94,21 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
             검사 시작
             <ArrowRight size={18} />
           </button>
+        </div>
+
+        <div className="mb-3">
+          <label className="mb-1.5 flex items-center gap-2 text-xs text-[#52525B]">
+            <Tag size={14} />
+            GA4 Tracking ID
+          </label>
+          <input
+            type="text"
+            value={trackingId}
+            onChange={e => setTrackingId(e.target.value.toUpperCase())}
+            placeholder={DEFAULT_TRACKING_ID}
+            className="w-full bg-[#1A1A1A] border border-[#2A2A2A] rounded-xl px-4 py-3 text-white placeholder-[#52525B] focus:outline-none focus:border-purple-600 focus:ring-1 focus:ring-purple-600 transition-all text-base font-mono"
+          />
+          <p className="mt-1.5 text-xs text-[#52525B]">입력한 Measurement ID의 태그만 분석합니다</p>
         </div>
 
         <div

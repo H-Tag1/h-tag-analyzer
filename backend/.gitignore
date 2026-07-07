@@ -5,3 +5,5 @@ __pycache__/
 .venv/
 venv/
 static/screenshots/*.png
+data/dismissed_issues.json
+data/scan_history/
