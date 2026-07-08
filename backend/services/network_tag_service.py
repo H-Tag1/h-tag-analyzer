@@ -30,19 +30,39 @@ COLLECT_PATH_PATTERNS = (
     re.compile(r"/gtag/destination"),
 )
 
+GA4_COLLECT_PATH_PATTERNS = (
+    re.compile(r"/g/collect"),
+    re.compile(r"/ccm/collect"),
+)
+
 
 class NetworkTagCollector:
-    def __init__(self, page: Page):
+    def __init__(self, page: Page, block_ga_transmission: bool = True):
         self.page = page
         self.hits: List[NetworkTagHit] = []
         self._trigger = "page_load"
         self._listener = None
+        self._route_handler = None
+        self.block_ga_transmission = block_ga_transmission
 
     async def start(self) -> None:
+        if self.block_ga_transmission:
+            self._route_handler = self._handle_route
+            await self.page.route("**/*", self._route_handler)
+            logger.info("GA4 collect transmission blocked (inspection-only mode)")
+            return
+
         self._listener = self._handle_request
         self.page.on("request", self._listener)
 
     async def stop(self) -> None:
+        if self._route_handler:
+            try:
+                await self.page.unroute("**/*", self._route_handler)
+            except Exception as exc:
+                logger.debug("Failed to unroute GA collector: %s", exc)
+            self._route_handler = None
+
         if self._listener:
             self.page.remove_listener("request", self._listener)
             self._listener = None
@@ -57,6 +77,17 @@ class NetworkTagCollector:
     def get_hits(self) -> List[NetworkTagHit]:
         return list(self.hits)
 
+    async def _handle_route(self, route) -> None:
+        request = route.request
+        if _is_ga4_collect_request(request.url):
+            hit = _parse_analytics_request(request, self._trigger)
+            if hit:
+                self.hits.append(hit)
+            await route.abort()
+            return
+
+        await route.continue_()
+
     def _handle_request(self, request: Request) -> None:
         if not _is_analytics_request(request.url):
             return
@@ -64,6 +95,19 @@ class NetworkTagCollector:
         hit = _parse_analytics_request(request, self._trigger)
         if hit:
             self.hits.append(hit)
+
+
+def _is_ga4_collect_request(url: str) -> bool:
+    if _detect_provider(url) != "ga4":
+        return False
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+
+    path = parsed.path or ""
+    return any(pattern.search(path) for pattern in GA4_COLLECT_PATH_PATTERNS)
 
 
 def _is_analytics_request(url: str) -> bool:

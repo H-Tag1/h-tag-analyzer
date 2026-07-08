@@ -18,14 +18,13 @@ from services.ga_event_exclusion_service import (
 
 logger = logging.getLogger(__name__)
 
-MAX_CLICK_CHECKS = 50
 CLICK_WAIT_MS = 350
 
 ELEMENT_QUERY_JS = """
 Array.from(document.querySelectorAll('button, a, [onclick], input[type="submit"], input[type="button"]'))
     .filter(el => {
         const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0 && rect.top >= 0;
+        return rect.width > 0 && rect.height > 0;
     })
 """
 
@@ -72,11 +71,7 @@ async def apply_click_tracking_detection(
     ]
     candidates.sort(key=_click_priority)
 
-    checked = 0
     for element in candidates:
-        if checked >= MAX_CLICK_CHECKS:
-            break
-
         url_before = page.url
         datalayer_before = await _collect_datalayer(page)
         network_hit_count_before = len(network_collector.get_hits()) if network_collector else 0
@@ -85,7 +80,6 @@ async def apply_click_tracking_detection(
         if not clicked:
             continue
 
-        checked += 1
         await page.wait_for_timeout(CLICK_WAIT_MS)
 
         datalayer_after = await _collect_datalayer(page)
@@ -93,9 +87,6 @@ async def apply_click_tracking_detection(
 
         if page.url != url_before:
             await _restore_page(page, page_url, url_before)
-
-        if not new_events:
-            continue
 
         ga_events = [
             event
@@ -355,7 +346,7 @@ async def _click_element_by_index(page: Page, element_index: int) -> bool:
         return bool(
             await page.evaluate(
                 f"""(index) => {{
-                    const els = {ELEMENT_QUERY_JS}.slice(0, 200);
+                    const els = {ELEMENT_QUERY_JS};
                     if (index < 0 || index >= els.length) return false;
                     els[index].click();
                     return true;

@@ -1,7 +1,9 @@
+import { useEffect, useRef } from 'react'
 import { Check } from 'lucide-react'
 import type { TrackedAnalysisItem } from '../types'
 import TagParamsTable from './TagParamsTable'
 import { normalizeTagSpec } from '../utils/tagSpec'
+import { scrollElementIntoContainerAfterLayout } from '../utils/scrollIntoContainer'
 
 interface Props {
   trackedItems: TrackedAnalysisItem[]
@@ -10,6 +12,18 @@ interface Props {
 }
 
 export default function TrackedPanel({ trackedItems, selectedIndex, onSelect }: Props) {
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([])
+  const listRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (selectedIndex === null || selectedIndex < 0) return
+
+    scrollElementIntoContainerAfterLayout(
+      itemRefs.current[selectedIndex] ?? null,
+      listRef.current,
+    )
+  }, [selectedIndex])
+
   if (trackedItems.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-[#52525B] py-16">
@@ -20,8 +34,8 @@ export default function TrackedPanel({ trackedItems, selectedIndex, onSelect }: 
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto">
+    <div className="flex flex-col h-full min-h-0">
+      <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto">
         {trackedItems.map((item, idx) => {
           const isSelected = selectedIndex === idx
           const params = normalizeTagSpec(item.tracking_data)
@@ -30,10 +44,15 @@ export default function TrackedPanel({ trackedItems, selectedIndex, onSelect }: 
           return (
             <div
               key={idx}
-              className={`border-b border-[#2A2A2A] transition-colors ${isSelected ? 'bg-white/[0.03]' : ''}`}
+              ref={node => {
+                itemRefs.current[idx] = node
+              }}
+              className={`border-b border-[#2A2A2A] transition-colors ${
+                isSelected ? 'bg-emerald-500/10 border-l-2 border-l-emerald-400' : 'border-l-2 border-l-transparent'
+              }`}
             >
               <button
-                onClick={() => onSelect(isSelected ? -1 : idx)}
+                onClick={() => onSelect(idx)}
                 className="w-full text-left px-4 py-3 hover:bg-white/[0.02]"
               >
                 <div className="flex items-start gap-3">

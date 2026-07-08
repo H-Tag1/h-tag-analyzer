@@ -45,7 +45,7 @@ export default function AllTagsPanel({ networkTags, selectedIndex, onSelect }: P
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-h-0">
       <div className="flex flex-wrap gap-1 px-3 py-2 border-b border-[#2A2A2A]">
         {([
           ['all', `전체 (${networkTags.length})`],
@@ -67,7 +67,7 @@ export default function AllTagsPanel({ networkTags, selectedIndex, onSelect }: P
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto">
         {filtered.map(({ tag, index: originalIndex }) => {
           const isSelected = selectedIndex === originalIndex
           const category = eventCategory(tag.event_name)

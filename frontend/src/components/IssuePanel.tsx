@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronRight, Check, Loader, Trash2 } from 'lucide-react'
 import type { AiAnalysisItem, GeneratedCodeSnapshot } from '../types'
 import TagSpecEditor from './TagSpecEditor'
@@ -6,6 +6,7 @@ import CodeViewer from './CodeViewer'
 import { issueIdentityKey } from '../utils/dismissedIssues'
 import { saveGeneratedCode } from '../utils/scanHistory'
 import { normalizeTagSpec, toGaSpec, type TagSpec } from '../utils/tagSpec'
+import { scrollElementIntoContainerAfterLayout } from '../utils/scrollIntoContainer'
 
 interface Props {
   issues: AiAnalysisItem[]
@@ -36,6 +37,17 @@ export default function IssuePanel({
   const [generatedCode, setGeneratedCode] = useState<string | null>(initialGeneratedCode)
   const [isGenerating, setIsGenerating] = useState(false)
   const [dismissingKey, setDismissingKey] = useState<string | null>(null)
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([])
+  const listRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (selectedIndex === null || selectedIndex < 0) return
+
+    scrollElementIntoContainerAfterLayout(
+      itemRefs.current[selectedIndex] ?? null,
+      listRef.current,
+    )
+  }, [selectedIndex])
 
   useEffect(() => {
     setGeneratedCode(initialGeneratedCode)
@@ -96,7 +108,7 @@ export default function IssuePanel({
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-h-0">
       <div className="flex-shrink-0 border-b border-[#2A2A2A] p-3 bg-[#111] z-10">
         <button
           onClick={handleGenerateAll}
@@ -117,7 +129,7 @@ export default function IssuePanel({
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto">
         {issues.map((item, idx) => {
           const isSelected = selectedIndex === idx
           const tag = getTagSpec(item, editedTags)
@@ -127,11 +139,16 @@ export default function IssuePanel({
           return (
             <div
               key={key}
-              className={`border-b border-[#2A2A2A] transition-colors ${isSelected ? 'bg-white/[0.03]' : ''}`}
+              ref={node => {
+                itemRefs.current[idx] = node
+              }}
+              className={`border-b border-[#2A2A2A] transition-colors ${
+                isSelected ? 'bg-red-500/10 border-l-2 border-l-red-400' : 'border-l-2 border-l-transparent'
+              }`}
             >
               <div className="flex items-start gap-1 px-2 py-3">
                 <button
-                  onClick={() => onSelect(isSelected ? -1 : idx)}
+                  onClick={() => onSelect(idx)}
                   className="flex-1 flex items-start gap-3 text-left hover:bg-white/[0.02] rounded-lg px-2 py-0.5 min-w-0"
                 >
                   <div className="w-1.5 h-1.5 rounded-full bg-red-500 mt-1.5 flex-shrink-0" />

@@ -1,5 +1,6 @@
-import { useRef, useEffect, useState } from 'react'
-import type { AiAnalysisItem, TrackedAnalysisItem } from '../types'
+import { useEffect, useRef, useState, type RefObject } from 'react'
+import type { AiAnalysisItem, BoundingBox, TrackedAnalysisItem } from '../types'
+import { scrollElementIntoContainerAfterLayout } from '../utils/scrollIntoContainer'
 
 interface Props {
   screenshotId: string
@@ -9,116 +10,159 @@ interface Props {
   trackedItems: TrackedAnalysisItem[]
   selectedIssueIndex: number | null
   selectedTrackedIndex: number | null
+  scrollContainerRef?: RefObject<HTMLDivElement | null>
   onSelectIssue: (index: number) => void
   onSelectTracked: (index: number) => void
 }
 
-function hasVisibleBox(box: { width: number; height: number }): boolean {
+function hasVisibleBox(box: BoundingBox): boolean {
   return box.width > 0 && box.height > 0
+}
+
+function isNormalizedBox(box: BoundingBox): boolean {
+  return box.x <= 1 && box.y <= 1 && box.width <= 1 && box.height <= 1
+}
+
+function boxToStyle(box: BoundingBox, imageWidth: number, imageHeight: number) {
+  if (isNormalizedBox(box)) {
+    return {
+      left: `${box.x * 100}%`,
+      top: `${box.y * 100}%`,
+      width: `${box.width * 100}%`,
+      height: `${box.height * 100}%`,
+    }
+  }
+
+  const toPercent = (value: number, total: number) =>
+    total > 0 ? `${(value / total) * 100}%` : '0%'
+
+  return {
+    left: toPercent(box.x, imageWidth),
+    top: toPercent(box.y, imageHeight),
+    width: toPercent(box.width, imageWidth),
+    height: toPercent(box.height, imageHeight),
+  }
 }
 
 export default function ScreenshotOverlay({
   screenshotId,
   originalWidth,
+  originalHeight,
   issues,
   trackedItems,
   selectedIssueIndex,
   selectedTrackedIndex,
+  scrollContainerRef,
   onSelectIssue,
   onSelectTracked,
 }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [scale, setScale] = useState(1)
+  const trackedRefs = useRef<(HTMLDivElement | null)[]>([])
+  const issueRefs = useRef<(HTMLDivElement | null)[]>([])
+  const [imageLoaded, setImageLoaded] = useState(false)
+
   const isMobileScreenshot = originalWidth <= 500
   const maxDisplayWidth = isMobileScreenshot ? Math.min(originalWidth, 430) : undefined
 
+  const getScrollContainer = () => scrollContainerRef?.current ?? null
+
   useEffect(() => {
-    const update = () => {
-      if (containerRef.current) {
-        setScale(containerRef.current.offsetWidth / originalWidth)
-      }
-    }
-    update()
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
-  }, [originalWidth])
+    if (!imageLoaded || selectedTrackedIndex === null || selectedTrackedIndex < 0) return
+
+    scrollElementIntoContainerAfterLayout(
+      trackedRefs.current[selectedTrackedIndex] ?? null,
+      getScrollContainer(),
+    )
+  }, [selectedTrackedIndex, imageLoaded, screenshotId, scrollContainerRef])
+
+  useEffect(() => {
+    if (!imageLoaded || selectedIssueIndex === null || selectedIssueIndex < 0) return
+
+    scrollElementIntoContainerAfterLayout(
+      issueRefs.current[selectedIssueIndex] ?? null,
+      getScrollContainer(),
+    )
+  }, [selectedIssueIndex, imageLoaded, screenshotId, scrollContainerRef])
 
   return (
     <div
-      ref={containerRef}
       className={`relative w-full ${isMobileScreenshot ? 'mx-auto' : ''}`}
       style={maxDisplayWidth ? { maxWidth: maxDisplayWidth } : undefined}
     >
       <img
         src={`/api/screenshots/${screenshotId}`}
         alt="Page screenshot"
-        className="w-full block rounded-lg"
-        onLoad={() => {
-          if (containerRef.current) {
-            setScale(containerRef.current.offsetWidth / originalWidth)
-          }
-        }}
+        className="w-full h-auto block rounded-lg ring-1 ring-white/5"
+        onLoad={() => setImageLoaded(true)}
+        draggable={false}
       />
 
-      {trackedItems.map((item, i) => {
-        if (!hasVisibleBox(item.bounding_box)) return null
-        const { x, y, width, height } = item.bounding_box
-        const isSelected = selectedTrackedIndex === i
+      <div className="absolute inset-0 pointer-events-none">
+        {trackedItems.map((item, i) => {
+          if (!hasVisibleBox(item.bounding_box)) return null
+          const isSelected = selectedTrackedIndex === i
 
-        return (
-          <div
-            key={`tracked-${i}`}
-            onClick={() => onSelectTracked(i)}
-            title={item.tracking_description}
-            style={{
-              position: 'absolute',
-              left: x * scale,
-              top: y * scale,
-              width: width * scale,
-              height: height * scale,
-            }}
-            className={`cursor-pointer rounded transition-all ${
-              isSelected
-                ? 'bg-emerald-500/30 border-2 border-emerald-400 shadow-lg shadow-emerald-900/40 z-20'
-                : 'bg-emerald-500/15 border border-emerald-500/60 hover:bg-emerald-500/25 z-10'
-            }`}
-          >
-            <span className="absolute -top-5 left-0 text-[10px] text-emerald-400 bg-[#1A1A1A]/90 px-1 rounded whitespace-nowrap max-w-[180px] truncate pointer-events-none">
-              {item.tracking_data?.event_name as string || item.element_text || item.element_selector}
-            </span>
-          </div>
-        )
-      })}
+          return (
+            <div
+              key={`tracked-${i}`}
+              ref={node => {
+                trackedRefs.current[i] = node
+              }}
+              onClick={event => {
+                event.stopPropagation()
+                onSelectTracked(i)
+              }}
+              title={item.tracking_description}
+              style={{
+                position: 'absolute',
+                pointerEvents: 'auto',
+                ...boxToStyle(item.bounding_box, originalWidth, originalHeight),
+              }}
+              className={`cursor-pointer rounded transition-all ${
+                isSelected
+                  ? 'bg-emerald-500/30 border-2 border-emerald-400 shadow-lg shadow-emerald-900/40 z-20'
+                  : 'bg-emerald-500/15 border border-emerald-500/60 hover:bg-emerald-500/25 z-10'
+              }`}
+            >
+              <span className="absolute -top-5 left-0 text-[10px] text-emerald-400 bg-[#1A1A1A]/90 px-1 rounded whitespace-nowrap max-w-[180px] truncate pointer-events-none">
+                {item.tracking_data?.event_name as string || item.element_text || item.element_selector}
+              </span>
+            </div>
+          )
+        })}
 
-      {issues.map((item, i) => {
-        if (!hasVisibleBox(item.bounding_box)) return null
-        const { x, y, width, height } = item.bounding_box
-        const isSelected = selectedIssueIndex === i
+        {issues.map((item, i) => {
+          if (!hasVisibleBox(item.bounding_box)) return null
+          const isSelected = selectedIssueIndex === i
 
-        return (
-          <div
-            key={`issue-${i}`}
-            onClick={() => onSelectIssue(i)}
-            title={item.issue}
-            style={{
-              position: 'absolute',
-              left: x * scale,
-              top: y * scale,
-              width: width * scale,
-              height: height * scale,
-            }}
-            className={`cursor-pointer rounded transition-all ${
-              isSelected
-                ? 'bg-red-500/30 border-2 border-red-400 shadow-lg shadow-red-900/40 z-20'
-                : 'bg-red-500/15 border border-red-500/60 hover:bg-red-500/25 z-10'
-            }`}
-          >
-            <span className="absolute -top-5 left-0 text-[10px] text-red-400 bg-[#1A1A1A]/90 px-1 rounded whitespace-nowrap max-w-[180px] truncate pointer-events-none">
-              {item.recommended_ga_spec?.event_name as string || item.element_text || item.element_selector}
-            </span>
-          </div>
-        )
-      })}
+          return (
+            <div
+              key={`issue-${i}`}
+              ref={node => {
+                issueRefs.current[i] = node
+              }}
+              onClick={event => {
+                event.stopPropagation()
+                onSelectIssue(i)
+              }}
+              title={item.issue}
+              style={{
+                position: 'absolute',
+                pointerEvents: 'auto',
+                ...boxToStyle(item.bounding_box, originalWidth, originalHeight),
+              }}
+              className={`cursor-pointer rounded transition-all ${
+                isSelected
+                  ? 'bg-red-500/30 border-2 border-red-400 shadow-lg shadow-red-900/40 z-20'
+                  : 'bg-red-500/15 border border-red-500/60 hover:bg-red-500/25 z-10'
+              }`}
+            >
+              <span className="absolute -top-5 left-0 text-[10px] text-red-400 bg-[#1A1A1A]/90 px-1 rounded whitespace-nowrap max-w-[180px] truncate pointer-events-none">
+                {item.recommended_ga_spec?.event_name as string || item.element_text || item.element_selector}
+              </span>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

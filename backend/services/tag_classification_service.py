@@ -154,6 +154,10 @@ def _find_element_for_hit(
     button_name = _normalize_label(params.get("ep_button_name", ""))
     event_name = (hit.event_name or "").strip().lower()
 
+    click_verified = _find_click_verified_elements(elements, event_name, params)
+    if len(click_verified) == 1:
+        return click_verified[0]
+
     if button_name:
         exact_matches = [
             element for element in elements
@@ -162,28 +166,51 @@ def _find_element_for_hit(
         if len(exact_matches) == 1:
             return exact_matches[0]
 
-        partial_matches = [
-            element for element in elements
-            if element.bounding_box and (
-                button_name in _normalize_label(element.text or "")
-                or _normalize_label(element.text or "") in button_name
-            )
-        ]
-        if len(partial_matches) == 1:
-            return partial_matches[0]
-
-    for element in elements:
-        if not element.bounding_box:
-            continue
-        for click_event in element.click_tracking_events:
-            if _event_name_from_dict(click_event).lower() == event_name:
-                return element
-        tracking_data = element.tracking_data or {}
-        tracked_event = str(tracking_data.get("event_name") or tracking_data.get("event") or "").strip().lower()
-        if tracked_event and tracked_event == event_name:
-            return element
+        if params.get("ep_button_area"):
+            area = _normalize_label(params["ep_button_area"])
+            area_matches = [
+                element for element in exact_matches
+                if area in _normalize_label(element.selector)
+                or area in _normalize_label(element.text or "")
+            ]
+            if len(area_matches) == 1:
+                return area_matches[0]
 
     return None
+
+
+def _find_click_verified_elements(
+    elements: List[PageElement],
+    event_name: str,
+    params: Dict[str, str],
+) -> List[PageElement]:
+    button_name = _normalize_label(params.get("ep_button_name", ""))
+    matches: List[PageElement] = []
+
+    for element in elements:
+        if not element.bounding_box or not element.click_tracking_events:
+            continue
+        for click_event in element.click_tracking_events:
+            if _event_name_from_dict(click_event).lower() != event_name:
+                continue
+            event_params = _params_from_event_dict(click_event)
+            if button_name:
+                if _normalize_label(event_params.get("ep_button_name", "")) == button_name:
+                    matches.append(element)
+                    break
+                continue
+            if _params_match_score(event_params, params) >= 2:
+                matches.append(element)
+                break
+    return matches
+
+
+def _params_match_score(left: Dict[str, str], right: Dict[str, str]) -> int:
+    score = 0
+    for field in EP_FIELDS:
+        if left[field] and right[field] and _normalize_label(left[field]) == _normalize_label(right[field]):
+            score += 1
+    return score
 
 
 def _normalize_label(value: str) -> str:
