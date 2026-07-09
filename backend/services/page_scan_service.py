@@ -150,20 +150,14 @@ async def _collect_elements(page: Page, exclude_auth_actions: bool = False) -> L
             .filter(el => {
                 const rect = el.getBoundingClientRect();
                 const style = window.getComputedStyle(el);
-                const centerX = rect.left + rect.width / 2;
-                const centerY = rect.top + rect.height / 2;
-                const topElement = document.elementFromPoint(centerX, centerY);
                 return (
                     rect.width > 0 &&
                     rect.height > 0 &&
                     rect.bottom > 0 &&
                     rect.right > 0 &&
-                    rect.top < window.innerHeight &&
-                    rect.left < window.innerWidth &&
                     style.display !== 'none' &&
                     style.visibility !== 'hidden' &&
-                    Number(style.opacity || '1') > 0 &&
-                    (!topElement || el === topElement || el.contains(topElement))
+                    Number(style.opacity || '1') > 0
                 );
             })
             .map((el, index) => {
@@ -186,7 +180,7 @@ async def _collect_elements(page: Page, exclude_auth_actions: bool = False) -> L
                     has_ga_tag: staticTrackingSignals.length > 0,
                 };
             })
-            .slice(0, 200);
+            .slice(0, 500);
     }""")
 
     elements = []
