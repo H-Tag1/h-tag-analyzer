@@ -24,7 +24,22 @@ ELEMENT_QUERY_JS = """
 Array.from(document.querySelectorAll('button, a, [onclick], input[type="submit"], input[type="button"]'))
     .filter(el => {
         const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
+        const style = window.getComputedStyle(el);
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const topElement = document.elementFromPoint(centerX, centerY);
+        return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            rect.bottom > 0 &&
+            rect.right > 0 &&
+            rect.top < window.innerHeight &&
+            rect.left < window.innerWidth &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            Number(style.opacity || '1') > 0 &&
+            (!topElement || el === topElement || el.contains(topElement))
+        );
     })
 """
 
@@ -70,13 +85,15 @@ async def apply_click_tracking_detection(
         if _should_click_element(element, page_url)
     ]
     candidates.sort(key=_click_priority)
+    initial_url = page.url or page_url
 
     for element in candidates:
+        await _restore_initial_click_state(page, page_url, initial_url)
         url_before = page.url
         datalayer_before = await _collect_datalayer(page)
         network_hit_count_before = len(network_collector.get_hits()) if network_collector else 0
 
-        clicked = await _click_element_by_index(page, element.element_index)
+        clicked = await _click_initial_element(page, element)
         if not clicked:
             continue
 
@@ -94,7 +111,7 @@ async def apply_click_tracking_detection(
             if isinstance(event, dict) and _is_ga_tracking_event(event) and not is_ignored_datalayer_event(event)
         ]
 
-        network_events = _collect_click_network_events(network_collector, network_hit_count_before)
+        network_events = _collect_click_network_events(network_collector, network_hit_count_before, url_before)
         if not ga_events and not network_events:
             continue
 
@@ -112,6 +129,11 @@ async def apply_click_tracking_detection(
             element.text,
             normalized_events[0].get("event_name") or normalized_events[0].get("event"),
         )
+
+        if _should_reset_page_after_click(normalized_events):
+            await _restore_initial_click_state(page, page_url, initial_url, force=True)
+        else:
+            await _close_click_side_effects(page)
 
     return elements
 
@@ -341,22 +363,91 @@ def _should_click_element(element: PageElement, page_url: str) -> bool:
     return True
 
 
-async def _click_element_by_index(page: Page, element_index: int) -> bool:
+async def _click_initial_element(page: Page, element: PageElement) -> bool:
     try:
         return bool(
             await page.evaluate(
-                f"""(index) => {{
+                f"""(payload) => {{
                     const els = {ELEMENT_QUERY_JS};
-                    if (index < 0 || index >= els.length) return false;
-                    els[index].click();
+                    function buildSelector(el) {{
+                        if (el.id) return '#' + CSS.escape(el.id);
+                        if (el.className && typeof el.className === 'string') {{
+                            const cls = el.className.trim().split(/\\s+/)[0];
+                            if (cls) return el.tagName.toLowerCase() + '.' + CSS.escape(cls);
+                        }}
+                        return el.tagName.toLowerCase();
+                    }}
+                    function textOf(el) {{
+                        return (el.innerText || el.value || el.title || el.getAttribute('aria-label') || '').trim().slice(0, 120);
+                    }}
+                    function matches(el) {{
+                        return (
+                            buildSelector(el) === payload.selector &&
+                            el.tagName.toLowerCase() === payload.elementType &&
+                            textOf(el) === payload.text
+                        );
+                    }}
+
+                    let el = null;
+                    if (payload.index >= 0 && payload.index < els.length && matches(els[payload.index])) {{
+                        el = els[payload.index];
+                    }} else {{
+                        el = els.find(matches) || null;
+                    }}
+                    if (!el) return false;
+                    el.addEventListener('click', (event) => event.preventDefault(), {{
+                        capture: true,
+                        once: true,
+                    }});
+                    el.click();
                     return true;
                 }}""",
-                element_index,
+                {
+                    "index": element.element_index,
+                    "selector": element.selector,
+                    "text": element.text or "",
+                    "elementType": element.element_type,
+                },
             )
         )
     except Exception as exc:
-        logger.debug("Click failed for index %s: %s", element_index, exc)
+        logger.debug("Click failed for index %s: %s", element.element_index, exc)
         return False
+
+
+async def _restore_initial_click_state(page: Page, scan_url: str, initial_url: str, force: bool = False) -> None:
+    if not force and page.url == initial_url:
+        return
+
+    try:
+        await page.goto(initial_url, wait_until="load", timeout=30000)
+        await page.wait_for_timeout(500)
+        return
+    except Exception:
+        pass
+
+    try:
+        await page.goto(scan_url, wait_until="load", timeout=30000)
+        await page.wait_for_timeout(500)
+    except Exception as exc:
+        logger.warning("Failed to restore initial page before click: %s", exc)
+
+
+async def _close_click_side_effects(page: Page) -> None:
+    try:
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(100)
+    except Exception:
+        pass
+
+
+def _should_reset_page_after_click(events: List[Dict[str, Any]]) -> bool:
+    for event in events:
+        button_area = str(event.get("ep_button_area") or "")
+        button_name = str(event.get("ep_button_name") or "")
+        if button_name == "햄버거" or button_area.startswith("햄버거_메뉴"):
+            return True
+    return False
 
 
 async def _restore_page(page: Page, scan_url: str, url_before: str) -> None:
@@ -425,7 +516,7 @@ def _normalize_tracking_event(event: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def _collect_click_network_events(network_collector, hit_count_before: int) -> List[Dict[str, Any]]:
+def _collect_click_network_events(network_collector, hit_count_before: int, page_url: str) -> List[Dict[str, Any]]:
     if not network_collector:
         return []
 
@@ -436,12 +527,40 @@ def _collect_click_network_events(network_collector, hit_count_before: int) -> L
         event_name = (hit.event_name or "").strip()
         if not is_click_event(event_name):
             continue
+        if not _network_hit_matches_page_url(hit, page_url):
+            continue
         params = extract_ep_params(hit)
         events.append({
             "event_name": event_name,
             **params,
         })
     return events
+
+
+def _network_hit_matches_page_url(hit, page_url: str) -> bool:
+    hit_url = ""
+    for field in getattr(hit, "display_fields", []) or []:
+        if field.label == "Document location URL":
+            hit_url = field.value
+            break
+
+    if not hit_url:
+        return True
+
+    return _same_url_without_query(hit_url, page_url)
+
+
+def _same_url_without_query(left: str, right: str) -> bool:
+    try:
+        left_parsed = urlparse(left)
+        right_parsed = urlparse(right)
+    except Exception:
+        return left == right
+
+    return (
+        (left_parsed.hostname or "").lower() == (right_parsed.hostname or "").lower()
+        and left_parsed.path == right_parsed.path
+    )
 
 
 def _has_ga_event_fields(tracking_data: Dict[str, Any]) -> bool:

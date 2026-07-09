@@ -149,7 +149,22 @@ async def _collect_elements(page: Page, exclude_auth_actions: bool = False) -> L
         return Array.from(document.querySelectorAll('button, a, [onclick], input[type="submit"], input[type="button"]'))
             .filter(el => {
                 const rect = el.getBoundingClientRect();
-                return rect.width > 0 && rect.height > 0 && rect.top >= 0;
+                const style = window.getComputedStyle(el);
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+                const topElement = document.elementFromPoint(centerX, centerY);
+                return (
+                    rect.width > 0 &&
+                    rect.height > 0 &&
+                    rect.bottom > 0 &&
+                    rect.right > 0 &&
+                    rect.top < window.innerHeight &&
+                    rect.left < window.innerWidth &&
+                    style.display !== 'none' &&
+                    style.visibility !== 'hidden' &&
+                    Number(style.opacity || '1') > 0 &&
+                    (!topElement || el === topElement || el.contains(topElement))
+                );
             })
             .map((el, index) => {
                 const rect = el.getBoundingClientRect();
