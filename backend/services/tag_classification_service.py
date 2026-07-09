@@ -28,7 +28,7 @@ def classify_network_tags(
 
     click_hits = [
         hit for hit in hits
-        if is_click_event((hit.event_name or "").strip())
+        if is_interaction_event((hit.event_name or "").strip(), extract_ep_params(hit))
     ]
 
     for element in elements or []:
@@ -37,11 +37,11 @@ def classify_network_tags(
 
         for click_event in element.click_tracking_events:
             event_name = _event_name_from_dict(click_event)
-            if not is_click_event(event_name):
+            params = _params_from_event_dict(click_event)
+            if not is_interaction_event(event_name, params):
                 continue
 
             hit = _find_network_hit_for_event(click_hits, event_name, click_event)
-            params = _params_from_event_dict(click_event)
             missing_fields = [field for field in EP_FIELDS if not params[field]]
 
             item_key = f"{_element_key(element)}|{_event_signature(event_name, params)}"
@@ -85,6 +85,14 @@ def classify_network_tags(
 
 def is_click_event(event_name: str) -> bool:
     return event_name.lower().startswith("click_")
+
+
+def is_interaction_event(event_name: str, params: Dict[str, str]) -> bool:
+    if is_click_event(event_name):
+        return True
+    if event_name.lower() not in {"page_view", "undefined"}:
+        return False
+    return any((params.get(field) or "").strip() for field in EP_FIELDS)
 
 
 def extract_ep_params(hit: NetworkTagHit) -> Dict[str, str]:

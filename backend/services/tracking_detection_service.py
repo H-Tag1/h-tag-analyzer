@@ -17,6 +17,8 @@ from services.ga_event_exclusion_service import (
 logger = logging.getLogger(__name__)
 
 CLICK_WAIT_MS = 350
+CLICK_EVENT_WAIT_MS = 1200
+CLICK_EVENT_POLL_MS = 100
 
 ELEMENT_QUERY_JS = """
 Array.from(document.querySelectorAll('button, a, [onclick], input[type="submit"], input[type="button"]'))
@@ -103,7 +105,14 @@ async def apply_click_tracking_detection(
             else []
         )
 
-        await page.wait_for_timeout(CLICK_WAIT_MS)
+        await _wait_for_click_events(page, datalayer_before, network_collector, network_hit_count_before)
+        datalayer_after = await _collect_datalayer(page)
+        url_after_datalayer = page.url
+        new_events = (
+            _diff_datalayer(datalayer_before, datalayer_after)
+            if url_after_datalayer == url_before
+            else new_events
+        )
 
         ga_events = [
             event
@@ -118,6 +127,7 @@ async def apply_click_tracking_detection(
 
         normalized_events = [_normalize_tracking_event(event) for event in ga_events]
         normalized_events.extend(network_events)
+        normalized_events.sort(key=_tracking_event_priority)
         element.click_tracking_events.extend(normalized_events)
         element.has_ga_tag = True
         if "click_datalayer" not in element.tracking_methods:
@@ -520,23 +530,51 @@ def _normalize_tracking_event(event: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
+async def _wait_for_click_events(page: Page, datalayer_before, network_collector, hit_count_before: int) -> None:
+    waited_ms = 0
+    while waited_ms < CLICK_EVENT_WAIT_MS:
+        if _collect_click_network_events(network_collector, hit_count_before):
+            return
+
+        datalayer_after = await _collect_datalayer(page)
+        new_events = _diff_datalayer(datalayer_before, datalayer_after)
+        if any(_event_name_from_tracking_dict(event).lower().startswith("click_") for event in new_events if isinstance(event, dict)):
+            return
+
+        await page.wait_for_timeout(CLICK_EVENT_POLL_MS)
+        waited_ms += CLICK_EVENT_POLL_MS
+
+
 def _collect_click_network_events(network_collector, hit_count_before: int) -> List[Dict[str, Any]]:
     if not network_collector:
         return []
 
-    from services.tag_classification_service import extract_ep_params, is_click_event
+    from services.tag_classification_service import extract_ep_params, is_interaction_event
 
     events: List[Dict[str, Any]] = []
     for hit in network_collector.get_hits()[hit_count_before:]:
         event_name = (hit.event_name or "").strip()
-        if not is_click_event(event_name):
-            continue
         params = extract_ep_params(hit)
+        if not is_interaction_event(event_name, params):
+            continue
         events.append({
             "event_name": event_name,
             **params,
         })
     return events
+
+
+def _tracking_event_priority(event: Dict[str, Any]) -> int:
+    event_name = _event_name_from_tracking_dict(event).lower()
+    if event_name.startswith("click_"):
+        return 0
+    if event_name == "page_view":
+        return 2
+    return 1
+
+
+def _event_name_from_tracking_dict(event: Dict[str, Any]) -> str:
+    return str(event.get("event_name") or event.get("event") or "").strip()
 
 
 def _has_ga_event_fields(tracking_data: Dict[str, Any]) -> bool:
