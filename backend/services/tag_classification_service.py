@@ -30,12 +30,18 @@ def classify_network_tags(
         hit for hit in hits
         if is_interaction_event((hit.event_name or "").strip(), extract_ep_params(hit))
     ]
+    click_param_signatures = {
+        _param_signature(extract_ep_params(hit))
+        for hit in click_hits
+        if is_click_event((hit.event_name or "").strip())
+    }
+    element_click_param_keys = _element_click_param_keys(elements or [])
 
     for element in elements or []:
         if not element.bounding_box:
             continue
 
-        for click_event in element.click_tracking_events:
+        for click_event in _prefer_click_events(element.click_tracking_events):
             event_name = _event_name_from_dict(click_event)
             params = _params_from_event_dict(click_event)
             if not is_interaction_event(event_name, params):
@@ -58,6 +64,11 @@ def classify_network_tags(
     for hit in click_hits:
         event_name = (hit.event_name or "").strip()
         params = extract_ep_params(hit)
+        element = _find_element_for_hit(hit, elements or [])
+
+        if _has_click_equivalent(event_name, params, element, element_click_param_keys, click_param_signatures):
+            continue
+
         signature = _event_signature(event_name, params)
 
         if _signature_covered(seen_keys, signature):
@@ -66,7 +77,6 @@ def classify_network_tags(
         item_key = f"network|{signature}"
         seen_keys.add(item_key)
         missing_fields = [field for field in EP_FIELDS if not params[field]]
-        element = _find_element_for_hit(hit, elements or [])
 
         if not missing_fields:
             tracked_items.append(_to_tracked_item(element, event_name, params, hit.trigger))
@@ -139,8 +149,73 @@ def _event_signature(event_name: str, params: Dict[str, str]) -> str:
     ])
 
 
+def _param_signature(params: Dict[str, str]) -> str:
+    return "|".join([
+        params["ep_button_area"],
+        params["ep_button_area2"],
+        params["ep_button_name"],
+    ])
+
+
 def _element_key(element: PageElement) -> str:
     return f"{element.selector}|{(element.text or '').strip()}"
+
+
+def _element_param_key(element: PageElement, params: Dict[str, str]) -> str:
+    return f"{_element_key(element)}|{_param_signature(params)}"
+
+
+def _element_click_param_keys(elements: List[PageElement]) -> set[str]:
+    keys: set[str] = set()
+    for element in elements:
+        for event in element.click_tracking_events:
+            event_name = _event_name_from_dict(event)
+            if not is_click_event(event_name):
+                continue
+            params = _params_from_event_dict(event)
+            keys.add(_element_param_key(element, params))
+    return keys
+
+
+def _prefer_click_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    click_param_signatures = {
+        _param_signature(_params_from_event_dict(event))
+        for event in events
+        if is_click_event(_event_name_from_dict(event))
+    }
+    if not click_param_signatures:
+        return events
+
+    preferred: List[Dict[str, Any]] = []
+    for event in events:
+        event_name = _event_name_from_dict(event)
+        params = _params_from_event_dict(event)
+        if (
+            not is_click_event(event_name)
+            and event_name.lower() in {"page_view", "undefined"}
+            and _param_signature(params) in click_param_signatures
+        ):
+            continue
+        preferred.append(event)
+    return preferred
+
+
+def _has_click_equivalent(
+    event_name: str,
+    params: Dict[str, str],
+    element: Optional[PageElement],
+    element_click_param_keys: set[str],
+    click_param_signatures: set[str],
+) -> bool:
+    if is_click_event(event_name):
+        return False
+    if event_name.lower() not in {"page_view", "undefined"}:
+        return False
+
+    param_signature = _param_signature(params)
+    if element and _element_param_key(element, params) in element_click_param_keys:
+        return True
+    return param_signature in click_param_signatures
 
 
 def _event_name_from_dict(event: Dict[str, Any]) -> str:

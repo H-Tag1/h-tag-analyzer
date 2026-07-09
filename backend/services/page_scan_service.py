@@ -274,13 +274,25 @@ async def _open_pc_login_page(page: Page, target_url: str) -> Page:
     has_login_function = await page.evaluate("() => typeof login === 'function'")
     if has_login_function:
         try:
-            async with page.expect_popup(timeout=10000) as popup_info:
+            async with page.expect_popup(timeout=15000) as popup_info:
                 await page.evaluate("(url) => login(url)", target_url)
-            return await popup_info.value
+            login_page = await popup_info.value
+            await _wait_for_login_page(login_page)
+            return login_page
         except (PlaywrightError, PlaywrightTimeoutError):
             pass
 
+    try:
+        async with page.expect_popup(timeout=15000) as popup_info:
+            await page.get_by_text("로그인", exact=True).first.click()
+        login_page = await popup_info.value
+        await _wait_for_login_page(login_page)
+        return login_page
+    except (PlaywrightError, PlaywrightTimeoutError):
+        pass
+
     await page.goto(_login_url_for(target_url), wait_until="load", timeout=60000)
+    await _wait_for_login_page(page)
     return page
 
 
@@ -300,21 +312,65 @@ async def _login_hddfs_mobile(page: Page, target_url: str, login: ScanLoginCrede
 
 
 async def _submit_login_form(page: Page, login: ScanLoginCredentials) -> None:
-    if login.memberType == "simple":
-        form = "#frmGeneLgin"
-        user_selector = f"{form} #mbshId"
-        password_selector = f"{form} #mbshPwd"
-        button_selector = f"{form} #btnLgin2, {form} #btnLgin"
-    else:
-        form = "#frmIntgLgin"
-        user_selector = f"{form} #custId"
-        password_selector = f"{form} #custPwd"
-        button_selector = f"{form} #btnLgin1, {form} #btnLgin"
+    await _activate_login_member_tab(page, login.memberType)
+    form_candidates = _login_form_candidates(login.memberType)
+    selected_form = None
 
-    await page.wait_for_selector(user_selector, timeout=15000)
-    await page.fill(user_selector, login.username.strip())
-    await page.fill(password_selector, login.password)
-    await page.locator(button_selector).first.click()
+    for candidate in form_candidates:
+        try:
+            await page.locator(candidate["user_selector"]).wait_for(state="visible", timeout=3000)
+            selected_form = candidate
+            break
+        except PlaywrightTimeoutError:
+            continue
+
+    if not selected_form:
+        raise RuntimeError("로그인 입력 폼을 찾지 못했습니다. 회원 유형 또는 로그인 페이지 상태를 확인해주세요.")
+
+    await page.fill(selected_form["user_selector"], login.username.strip())
+    await page.fill(selected_form["password_selector"], login.password)
+    await page.locator(selected_form["button_selector"]).first.click()
+
+
+async def _wait_for_login_page(page: Page) -> None:
+    try:
+        await page.wait_for_load_state("load", timeout=15000)
+    except PlaywrightTimeoutError:
+        pass
+
+    selectors = ", ".join(candidate["user_selector"] for candidate in _login_form_candidates("integrated"))
+    try:
+        await page.locator(selectors).first.wait_for(state="attached", timeout=15000)
+    except PlaywrightTimeoutError:
+        raise RuntimeError("로그인 페이지가 정상적으로 열리지 않았습니다. 로그인 팝업 차단 또는 페이지 상태를 확인해주세요.")
+
+
+async def _activate_login_member_tab(page: Page, member_type: str) -> None:
+    tab_text = "면세점간편회원" if member_type == "simple" else "H.Point통합회원"
+    try:
+        tab = page.get_by_text(tab_text, exact=True).first
+        if await tab.is_visible(timeout=1000):
+            await tab.click()
+            await page.wait_for_timeout(300)
+    except (PlaywrightError, PlaywrightTimeoutError):
+        pass
+
+
+def _login_form_candidates(member_type: str) -> List[Dict[str, str]]:
+    integrated_form = {
+        "user_selector": "#frmIntgLgin #custId",
+        "password_selector": "#frmIntgLgin #custPwd",
+        "button_selector": "#frmIntgLgin #btnLgin1, #frmIntgLgin #btnLgin",
+    }
+    simple_form = {
+        "user_selector": "#frmGeneLgin #mbshId",
+        "password_selector": "#frmGeneLgin #mbshPwd",
+        "button_selector": "#frmGeneLgin #btnLgin2, #frmGeneLgin #btnLgin",
+    }
+
+    if member_type == "simple":
+        return [simple_form, integrated_form]
+    return [integrated_form, simple_form]
 
 
 async def _is_logged_in(page: Page) -> bool:
