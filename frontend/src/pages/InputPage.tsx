@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Search, Clock, ArrowRight, ArrowLeft, LayoutGrid, LockKeyhole, UserRound, Tag } from 'lucide-react'
+import { Search, Clock, ArrowRight, ArrowLeft, LockKeyhole, UserRound, Tag } from 'lucide-react'
 import type { LoginMemberType, ScanStartOptions } from '../types'
 import { DEFAULT_TRACKING_ID } from '../types'
 
@@ -14,7 +14,6 @@ const HISTORY_KEY = 'htag_url_history'
 export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
   const [url, setUrl] = useState('')
   const [trackingId, setTrackingId] = useState(DEFAULT_TRACKING_ID)
-  const [fullScan, setFullScan] = useState(false)
   const [loginEnabled, setLoginEnabled] = useState(false)
   const [memberType, setMemberType] = useState<LoginMemberType>('integrated')
   const [username, setUsername] = useState('')
@@ -35,7 +34,7 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory))
     onStart({
       url: normalized,
-      fullScan,
+      fullScan: false,
       trackingId: trackingId.trim().toUpperCase(),
       login: loginEnabled
         ? {
@@ -112,25 +111,7 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
         </div>
 
         <div
-          onClick={() => setFullScan(v => !v)}
-          className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-all select-none ${
-            fullScan
-              ? 'border-purple-700 bg-purple-900/20 text-white'
-              : 'border-[#2A2A2A] bg-[#1A1A1A] text-[#A1A1AA] hover:border-[#3A3A3A]'
-          }`}
-        >
-          <div className={`w-9 h-5 rounded-full relative transition-colors ${fullScan ? 'bg-purple-600' : 'bg-[#3A3A3A]'}`}>
-            <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${fullScan ? 'translate-x-4' : 'translate-x-0.5'}`} />
-          </div>
-          <LayoutGrid size={16} className={fullScan ? 'text-purple-400' : 'text-[#52525B]'} />
-          <div>
-            <p className="text-sm font-medium">전체 온라인몰 체크</p>
-            <p className="text-xs text-[#52525B]">동일 도메인 내부 페이지를 depth 2까지 자동 스캔합니다</p>
-          </div>
-        </div>
-
-        <div
-          className={`mt-3 rounded-xl border transition-all ${
+          className={`rounded-xl border transition-all ${
             loginEnabled ? 'border-purple-700 bg-purple-900/10' : 'border-[#2A2A2A] bg-[#1A1A1A]'
           }`}
         >
