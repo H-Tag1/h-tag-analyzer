@@ -6,10 +6,22 @@ from models.bounding_box import BoundingBox
 from models.network_tag_hit import NetworkTagHit
 from models.page_element import PageElement
 from models.tracked_analysis_item import TrackedAnalysisItem
+from services.tracking.event_normalizer import (
+    EP_FIELDS,
+    element_click_param_keys,
+    event_name_from_dict,
+    event_signature,
+    extract_ep_params,
+    has_click_equivalent,
+    is_click_event,
+    is_interaction_event,
+    param_signature,
+    params_from_event_dict,
+    prefer_click_events,
+)
 
 logger = logging.getLogger(__name__)
 
-EP_FIELDS = ("ep_button_area", "ep_button_area2", "ep_button_name")
 EP_FIELD_LABELS = {
     "ep_button_area": "ep_button_area",
     "ep_button_area2": "ep_button_area2",
@@ -31,26 +43,26 @@ def classify_network_tags(
         if is_interaction_event((hit.event_name or "").strip(), extract_ep_params(hit))
     ]
     click_param_signatures = {
-        _param_signature(extract_ep_params(hit))
+        param_signature(extract_ep_params(hit))
         for hit in click_hits
         if is_click_event((hit.event_name or "").strip())
     }
-    element_click_param_keys = _element_click_param_keys(elements or [])
+    element_click_keys = element_click_param_keys(elements or [], _element_key)
 
     for element in elements or []:
         if not element.bounding_box:
             continue
 
-        for click_event in _prefer_click_events(element.click_tracking_events):
-            event_name = _event_name_from_dict(click_event)
-            params = _params_from_event_dict(click_event)
+        for click_event in prefer_click_events(element.click_tracking_events):
+            event_name = event_name_from_dict(click_event)
+            params = params_from_event_dict(click_event)
             if not is_interaction_event(event_name, params):
                 continue
 
             hit = _find_network_hit_for_event(click_hits, event_name, click_event)
             missing_fields = [field for field in EP_FIELDS if not params[field]]
 
-            item_key = f"{_element_key(element)}|{_event_signature(event_name, params)}"
+            item_key = f"{_element_key(element)}|{event_signature(event_name, params)}"
             if item_key in seen_keys:
                 continue
             seen_keys.add(item_key)
@@ -66,10 +78,10 @@ def classify_network_tags(
         params = extract_ep_params(hit)
         element = _find_element_for_hit(hit, elements or [])
 
-        if _has_click_equivalent(event_name, params, element, element_click_param_keys, click_param_signatures):
+        if has_click_equivalent(event_name, params, element, element_click_keys, click_param_signatures, _element_key):
             continue
 
-        signature = _event_signature(event_name, params)
+        signature = event_signature(event_name, params)
 
         if _signature_covered(seen_keys, signature):
             continue
@@ -93,140 +105,8 @@ def classify_network_tags(
     return tracked_items, issues
 
 
-def is_click_event(event_name: str) -> bool:
-    return event_name.lower().startswith("click_")
-
-
-def is_interaction_event(event_name: str, params: Dict[str, str]) -> bool:
-    if is_click_event(event_name):
-        return True
-    if event_name.lower() not in {"page_view", "undefined"}:
-        return False
-    return any((params.get(field) or "").strip() for field in EP_FIELDS)
-
-
-def extract_ep_params(hit: NetworkTagHit) -> Dict[str, str]:
-    if hit.ep_button_area or hit.ep_button_area2 or hit.ep_button_name:
-        return {
-            "ep_button_area": (hit.ep_button_area or "").strip(),
-            "ep_button_area2": (hit.ep_button_area2 or "").strip(),
-            "ep_button_name": (hit.ep_button_name or "").strip(),
-        }
-
-    extracted = {field: "" for field in EP_FIELDS}
-    for field in hit.display_fields:
-        normalized = field.label.lower()
-        if "ep_button_area2" in normalized:
-            extracted["ep_button_area2"] = field.value.strip()
-        elif "ep_button_area" in normalized:
-            extracted["ep_button_area"] = field.value.strip()
-        elif "ep_button_name" in normalized:
-            extracted["ep_button_name"] = field.value.strip()
-    return extracted
-
-
-def _params_from_event_dict(event: Dict[str, Any]) -> Dict[str, str]:
-    return {
-        field: str(event.get(field) or "").strip()
-        for field in EP_FIELDS
-    }
-
-
-def _merge_params(primary: Dict[str, str], secondary: Dict[str, str]) -> Dict[str, str]:
-    merged = dict(primary)
-    for field in EP_FIELDS:
-        if not merged[field] and secondary.get(field):
-            merged[field] = secondary[field]
-    return merged
-
-
-def _event_signature(event_name: str, params: Dict[str, str]) -> str:
-    return "|".join([
-        event_name,
-        params["ep_button_area"],
-        params["ep_button_area2"],
-        params["ep_button_name"],
-    ])
-
-
-def _param_signature(params: Dict[str, str]) -> str:
-    return "|".join([
-        params["ep_button_area"],
-        params["ep_button_area2"],
-        params["ep_button_name"],
-    ])
-
-
 def _element_key(element: PageElement) -> str:
     return f"{element.selector}|{(element.text or '').strip()}"
-
-
-def _element_param_key(element: PageElement, params: Dict[str, str]) -> str:
-    return f"{_element_key(element)}|{_param_signature(params)}"
-
-
-def _element_click_param_keys(elements: List[PageElement]) -> set[str]:
-    keys: set[str] = set()
-    for element in elements:
-        for event in element.click_tracking_events:
-            event_name = _event_name_from_dict(event)
-            if not is_click_event(event_name):
-                continue
-            params = _params_from_event_dict(event)
-            keys.add(_element_param_key(element, params))
-    return keys
-
-
-def _prefer_click_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    click_param_signatures = {
-        _param_signature(_params_from_event_dict(event))
-        for event in events
-        if is_click_event(_event_name_from_dict(event))
-    }
-    if not click_param_signatures:
-        return events
-
-    preferred: List[Dict[str, Any]] = []
-    for event in events:
-        event_name = _event_name_from_dict(event)
-        params = _params_from_event_dict(event)
-        if (
-            not is_click_event(event_name)
-            and event_name.lower() in {"page_view", "undefined"}
-            and _param_signature(params) in click_param_signatures
-        ):
-            continue
-        preferred.append(event)
-    return preferred
-
-
-def _has_click_equivalent(
-    event_name: str,
-    params: Dict[str, str],
-    element: Optional[PageElement],
-    element_click_param_keys: set[str],
-    click_param_signatures: set[str],
-) -> bool:
-    if is_click_event(event_name):
-        return False
-    if event_name.lower() not in {"page_view", "undefined"}:
-        return False
-
-    param_signature = _param_signature(params)
-    if element and _element_param_key(element, params) in element_click_param_keys:
-        return True
-    return param_signature in click_param_signatures
-
-
-def _event_name_from_dict(event: Dict[str, Any]) -> str:
-    event_name = str(event.get("event_name") or "").strip()
-    if event_name and event_name.lower() not in {"ga_event", "ga_virtual"}:
-        return event_name
-
-    raw_event = str(event.get("event") or "").strip()
-    if raw_event.lower().startswith("click_"):
-        return raw_event
-    return event_name or raw_event
 
 
 def _find_element_for_hit(
@@ -274,9 +154,9 @@ def _find_click_verified_elements(
         if not element.bounding_box or not element.click_tracking_events:
             continue
         for click_event in element.click_tracking_events:
-            if _event_name_from_dict(click_event).lower() != event_name:
+            if event_name_from_dict(click_event).lower() != event_name:
                 continue
-            event_params = _params_from_event_dict(click_event)
+            event_params = params_from_event_dict(click_event)
             if button_name:
                 if _normalize_label(event_params.get("ep_button_name", "")) == button_name:
                     matches.append(element)
@@ -324,7 +204,7 @@ def _find_network_hit_for_event(
 
 def _match_score(params: Dict[str, str], event: Dict[str, Any]) -> int:
     score = 0
-    event_params = _params_from_event_dict(event)
+    event_params = params_from_event_dict(event)
     for field in EP_FIELDS:
         if params[field] and event_params[field] and params[field] == event_params[field]:
             score += 1

@@ -543,7 +543,7 @@ def _collect_click_network_events(network_collector, hit_count_before: int) -> L
     if not network_collector:
         return []
 
-    from services.tag_classification_service import extract_ep_params, is_interaction_event
+    from services.tracking.event_normalizer import extract_ep_params, is_interaction_event
 
     events: List[Dict[str, Any]] = []
     for hit in network_collector.get_hits()[hit_count_before:]:
