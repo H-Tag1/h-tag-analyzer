@@ -3,8 +3,6 @@ import logging
 import re
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
-
 from playwright.async_api import Page
 
 from models.page_element import PageElement
@@ -97,13 +95,15 @@ async def apply_click_tracking_detection(
         if not clicked:
             continue
 
-        await page.wait_for_timeout(CLICK_WAIT_MS)
-
         datalayer_after = await _collect_datalayer(page)
-        new_events = _diff_datalayer(datalayer_before, datalayer_after)
+        url_after_datalayer = page.url
+        new_events = (
+            _diff_datalayer(datalayer_before, datalayer_after)
+            if url_after_datalayer == url_before
+            else []
+        )
 
-        if page.url != url_before:
-            await _restore_page(page, page_url, url_before)
+        await page.wait_for_timeout(CLICK_WAIT_MS)
 
         ga_events = [
             event
@@ -111,8 +111,9 @@ async def apply_click_tracking_detection(
             if isinstance(event, dict) and _is_ga_tracking_event(event) and not is_ignored_datalayer_event(event)
         ]
 
-        network_events = _collect_click_network_events(network_collector, network_hit_count_before, url_before)
+        network_events = _collect_click_network_events(network_collector, network_hit_count_before)
         if not ga_events and not network_events:
+            await _restore_initial_click_state(page, page_url, initial_url, force=page.url != initial_url)
             continue
 
         normalized_events = [_normalize_tracking_event(event) for event in ga_events]
@@ -134,6 +135,7 @@ async def apply_click_tracking_detection(
             await _restore_initial_click_state(page, page_url, initial_url, force=True)
         else:
             await _close_click_side_effects(page)
+            await _restore_initial_click_state(page, page_url, initial_url, force=page.url != initial_url)
 
     return elements
 
@@ -365,51 +367,53 @@ def _should_click_element(element: PageElement, page_url: str) -> bool:
 
 async def _click_initial_element(page: Page, element: PageElement) -> bool:
     try:
-        return bool(
-            await page.evaluate(
-                f"""(payload) => {{
-                    const els = {ELEMENT_QUERY_JS};
-                    function buildSelector(el) {{
-                        if (el.id) return '#' + CSS.escape(el.id);
-                        if (el.className && typeof el.className === 'string') {{
-                            const cls = el.className.trim().split(/\\s+/)[0];
-                            if (cls) return el.tagName.toLowerCase() + '.' + CSS.escape(cls);
-                        }}
-                        return el.tagName.toLowerCase();
+        click_point = await page.evaluate(
+            f"""(payload) => {{
+                const els = {ELEMENT_QUERY_JS};
+                function buildSelector(el) {{
+                    if (el.id) return '#' + CSS.escape(el.id);
+                    if (el.className && typeof el.className === 'string') {{
+                        const cls = el.className.trim().split(/\\s+/)[0];
+                        if (cls) return el.tagName.toLowerCase() + '.' + CSS.escape(cls);
                     }}
-                    function textOf(el) {{
-                        return (el.innerText || el.value || el.title || el.getAttribute('aria-label') || '').trim().slice(0, 120);
-                    }}
-                    function matches(el) {{
-                        return (
-                            buildSelector(el) === payload.selector &&
-                            el.tagName.toLowerCase() === payload.elementType &&
-                            textOf(el) === payload.text
-                        );
-                    }}
+                    return el.tagName.toLowerCase();
+                }}
+                function textOf(el) {{
+                    return (el.innerText || el.value || el.title || el.getAttribute('aria-label') || '').trim().slice(0, 120);
+                }}
+                function matches(el) {{
+                    return (
+                        buildSelector(el) === payload.selector &&
+                        el.tagName.toLowerCase() === payload.elementType &&
+                        textOf(el) === payload.text
+                    );
+                }}
 
-                    let el = null;
-                    if (payload.index >= 0 && payload.index < els.length && matches(els[payload.index])) {{
-                        el = els[payload.index];
-                    }} else {{
-                        el = els.find(matches) || null;
-                    }}
-                    if (!el) return false;
-                    el.addEventListener('click', (event) => event.preventDefault(), {{
-                        capture: true,
-                        once: true,
-                    }});
-                    el.click();
-                    return true;
-                }}""",
-                {
-                    "index": element.element_index,
-                    "selector": element.selector,
-                    "text": element.text or "",
-                    "elementType": element.element_type,
-                },
-            )
+                let el = null;
+                if (payload.index >= 0 && payload.index < els.length && matches(els[payload.index])) {{
+                    el = els[payload.index];
+                }} else {{
+                    el = els.find(matches) || null;
+                }}
+                if (!el) return null;
+                el.scrollIntoView({{ block: 'center', inline: 'center' }});
+                const rect = el.getBoundingClientRect();
+                return {{
+                    x: rect.left + rect.width / 2,
+                    y: rect.top + rect.height / 2,
+                }};
+            }}""",
+            {
+                "index": element.element_index,
+                "selector": element.selector,
+                "text": element.text or "",
+                "elementType": element.element_type,
+            },
         )
+        if not click_point:
+            return False
+        await page.mouse.click(click_point["x"], click_point["y"])
+        return True
     except Exception as exc:
         logger.debug("Click failed for index %s: %s", element.element_index, exc)
         return False
@@ -516,7 +520,7 @@ def _normalize_tracking_event(event: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def _collect_click_network_events(network_collector, hit_count_before: int, page_url: str) -> List[Dict[str, Any]]:
+def _collect_click_network_events(network_collector, hit_count_before: int) -> List[Dict[str, Any]]:
     if not network_collector:
         return []
 
@@ -527,40 +531,12 @@ def _collect_click_network_events(network_collector, hit_count_before: int, page
         event_name = (hit.event_name or "").strip()
         if not is_click_event(event_name):
             continue
-        if not _network_hit_matches_page_url(hit, page_url):
-            continue
         params = extract_ep_params(hit)
         events.append({
             "event_name": event_name,
             **params,
         })
     return events
-
-
-def _network_hit_matches_page_url(hit, page_url: str) -> bool:
-    hit_url = ""
-    for field in getattr(hit, "display_fields", []) or []:
-        if field.label == "Document location URL":
-            hit_url = field.value
-            break
-
-    if not hit_url:
-        return True
-
-    return _same_url_without_query(hit_url, page_url)
-
-
-def _same_url_without_query(left: str, right: str) -> bool:
-    try:
-        left_parsed = urlparse(left)
-        right_parsed = urlparse(right)
-    except Exception:
-        return left == right
-
-    return (
-        (left_parsed.hostname or "").lower() == (right_parsed.hostname or "").lower()
-        and left_parsed.path == right_parsed.path
-    )
 
 
 def _has_ga_event_fields(tracking_data: Dict[str, Any]) -> bool:
