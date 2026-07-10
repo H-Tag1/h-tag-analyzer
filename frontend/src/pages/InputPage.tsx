@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Search, Clock, ArrowRight, ArrowLeft, LockKeyhole, UserRound, Tag } from 'lucide-react'
-import type { LoginMemberType, ScanStartOptions } from '../types'
+import { Search, Clock, ArrowRight, ArrowLeft, LockKeyhole, UserRound, Tag, Ruler } from 'lucide-react'
+import type { LoginMemberType, ScanRangePreset, ScanStartOptions } from '../types'
 import { DEFAULT_TRACKING_ID } from '../types'
 
 interface Props {
@@ -10,6 +10,12 @@ interface Props {
 }
 
 const HISTORY_KEY = 'htag_url_history'
+const SCAN_RANGE_OPTIONS: { value: ScanRangePreset; label: string }[] = [
+  { value: 'viewport', label: '첫 화면' },
+  { value: 'top2', label: '상단 2화면' },
+  { value: 'full', label: '전체' },
+  { value: 'custom', label: '직접 입력' },
+]
 
 export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
   const [url, setUrl] = useState('')
@@ -18,6 +24,9 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
   const [memberType, setMemberType] = useState<LoginMemberType>('integrated')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [scanRangePreset, setScanRangePreset] = useState<ScanRangePreset>('top2')
+  const [customStartY, setCustomStartY] = useState('0')
+  const [customEndY, setCustomEndY] = useState('1800')
   const [history] = useState<string[]>(() => {
     const saved = localStorage.getItem(HISTORY_KEY)
     return saved ? JSON.parse(saved).slice(0, 5) : []
@@ -28,14 +37,20 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
     if (!url.trim()) return
     if (!trackingId.trim()) return
     if (loginEnabled && (!username.trim() || !password)) return
+    if (isCustomRangeInvalid) return
 
     const normalized = url.trim().startsWith('http') ? url.trim() : `https://${url.trim()}`
+    const customStart = Number(customStartY)
+    const customEnd = Number(customEndY)
     const newHistory = [normalized, ...history.filter(h => h !== normalized)].slice(0, 5)
     localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory))
     onStart({
       url: normalized,
       fullScan: false,
       trackingId: trackingId.trim().toUpperCase(),
+      scanRange: scanRangePreset === 'custom'
+        ? { preset: scanRangePreset, startY: customStart, endY: customEnd }
+        : { preset: scanRangePreset },
       login: loginEnabled
         ? {
             enabled: true,
@@ -47,7 +62,18 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
     })
   }
 
-  const isSubmitDisabled = !url.trim() || !trackingId.trim() || (loginEnabled && (!username.trim() || !password))
+  const customStart = Number(customStartY)
+  const customEnd = Number(customEndY)
+  const isCustomRangeInvalid = (
+    scanRangePreset === 'custom' &&
+    (!Number.isFinite(customStart) || !Number.isFinite(customEnd) || customStart < 0 || customEnd <= customStart)
+  )
+  const isSubmitDisabled = (
+    !url.trim() ||
+    !trackingId.trim() ||
+    (loginEnabled && (!username.trim() || !password)) ||
+    isCustomRangeInvalid
+  )
 
   const content = (
     <div className="relative z-10 mx-auto w-full max-w-2xl animate-fade-in">
@@ -108,6 +134,53 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
             className="w-full bg-[#1A1A1A] border border-[#2A2A2A] rounded-xl px-4 py-3 text-white placeholder-[#52525B] focus:outline-none focus:border-purple-600 focus:ring-1 focus:ring-purple-600 transition-all text-base font-mono"
           />
           <p className="mt-1.5 text-xs text-[#52525B]">입력한 Measurement ID의 태그만 분석합니다</p>
+        </div>
+
+        <div className="mb-3">
+          <label className="mb-1.5 flex items-center gap-2 text-xs text-[#52525B]">
+            <Ruler size={14} />
+            검사 범위
+          </label>
+          <div className="grid grid-cols-2 gap-2 rounded-xl border border-[#2A2A2A] bg-[#1A1A1A] p-1 md:grid-cols-4">
+            {SCAN_RANGE_OPTIONS.map(item => (
+              <button
+                key={item.value}
+                type="button"
+                onClick={() => setScanRangePreset(item.value)}
+                className={`rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+                  scanRangePreset === item.value
+                    ? 'bg-purple-600 text-white'
+                    : 'text-[#71717A] hover:bg-white/[0.04] hover:text-white'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          {scanRangePreset === 'custom' && (
+            <div className="mt-2 grid gap-2 md:grid-cols-2">
+              <input
+                type="number"
+                min="0"
+                value={customStartY}
+                onChange={e => setCustomStartY(e.target.value)}
+                placeholder="시작 Y(px)"
+                className="w-full rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] px-3 py-3 text-sm text-white placeholder-[#52525B] transition-all focus:border-purple-600 focus:outline-none focus:ring-1 focus:ring-purple-600"
+              />
+              <input
+                type="number"
+                min="1"
+                value={customEndY}
+                onChange={e => setCustomEndY(e.target.value)}
+                placeholder="종료 Y(px)"
+                className="w-full rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] px-3 py-3 text-sm text-white placeholder-[#52525B] transition-all focus:border-purple-600 focus:outline-none focus:ring-1 focus:ring-purple-600"
+              />
+            </div>
+          )}
+          {isCustomRangeInvalid && (
+            <p className="mt-1.5 text-xs text-red-400">종료 Y는 시작 Y보다 커야 합니다</p>
+          )}
         </div>
 
         <div

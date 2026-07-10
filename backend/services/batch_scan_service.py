@@ -6,7 +6,7 @@ from playwright.async_api import async_playwright
 
 from config import settings
 from models.page_scan_data import PageScanData
-from models.scan_request import ScanLoginCredentials
+from models.scan_request import ScanLoginCredentials, ScanRange
 from services.page_scan_service import (
     collect_authenticated_page_data,
     collect_page_data,
@@ -31,11 +31,12 @@ async def batch_scan(
     url: str,
     login: Optional[ScanLoginCredentials] = None,
     tracking_id: str = "G-1NWKV3S1TW",
+    scan_range: Optional[ScanRange] = None,
 ) -> AsyncGenerator[str, None]:
     yield json.dumps({"type": "scan_start", "url": url, "mode": "batch"})
 
     if login and login.enabled:
-        async for event in _authenticated_batch_scan(url, login, tracking_id):
+        async for event in _authenticated_batch_scan(url, login, tracking_id, scan_range):
             yield event
         return
 
@@ -49,7 +50,7 @@ async def batch_scan(
         yield json.dumps({"type": "page_start", "url": page_url, "index": idx + 1, "total": len(all_urls)})
 
         try:
-            page_data = await _scan_single(page_url, tracking_id)
+            page_data = await _scan_single(page_url, tracking_id, scan_range)
             yield json.dumps({"type": "page_complete", "url": page_url, "index": idx + 1, "data": page_data.model_dump()})
             pages.append(page_data.model_dump())
         except Exception as e:
@@ -63,11 +64,16 @@ async def single_scan(
     url: str,
     login: Optional[ScanLoginCredentials] = None,
     tracking_id: str = "G-1NWKV3S1TW",
+    scan_range: Optional[ScanRange] = None,
 ) -> AsyncGenerator[str, None]:
     yield json.dumps({"type": "scan_start", "url": url, "mode": "single"})
 
     target_tracking_id = normalize_tracking_id(tracking_id)
-    screenshot_id, width, height, elements, datalayer, network_tags = await collect_page_data(url, login)
+    screenshot_id, width, height, elements, datalayer, network_tags = await collect_page_data(
+        url,
+        login,
+        scan_range,
+    )
     elements, datalayer, network_tags = _apply_tracking_id_filter(
         elements, datalayer, network_tags, target_tracking_id
     )
@@ -100,9 +106,16 @@ async def single_scan(
     })
 
 
-async def _scan_single(url: str, tracking_id: str = "G-1NWKV3S1TW") -> PageScanData:
+async def _scan_single(
+    url: str,
+    tracking_id: str = "G-1NWKV3S1TW",
+    scan_range: Optional[ScanRange] = None,
+) -> PageScanData:
     target_tracking_id = normalize_tracking_id(tracking_id)
-    screenshot_id, width, height, elements, datalayer, network_tags = await collect_page_data(url)
+    screenshot_id, width, height, elements, datalayer, network_tags = await collect_page_data(
+        url,
+        scan_range=scan_range,
+    )
     elements, datalayer, network_tags = _apply_tracking_id_filter(
         elements, datalayer, network_tags, target_tracking_id
     )
@@ -122,6 +135,7 @@ async def _authenticated_batch_scan(
     url: str,
     login: ScanLoginCredentials,
     tracking_id: str = "G-1NWKV3S1TW",
+    scan_range: Optional[ScanRange] = None,
 ) -> AsyncGenerator[str, None]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -137,7 +151,7 @@ async def _authenticated_batch_scan(
                 yield json.dumps({"type": "page_start", "url": page_url, "index": idx + 1, "total": len(all_urls)})
 
                 try:
-                    page_data = await _scan_authenticated_single(page, page_url, tracking_id)
+                    page_data = await _scan_authenticated_single(page, page_url, tracking_id, scan_range)
                     yield json.dumps({
                         "type": "page_complete",
                         "url": page_url,
@@ -154,9 +168,18 @@ async def _authenticated_batch_scan(
             await browser.close()
 
 
-async def _scan_authenticated_single(page, url: str, tracking_id: str = "G-1NWKV3S1TW") -> PageScanData:
+async def _scan_authenticated_single(
+    page,
+    url: str,
+    tracking_id: str = "G-1NWKV3S1TW",
+    scan_range: Optional[ScanRange] = None,
+) -> PageScanData:
     target_tracking_id = normalize_tracking_id(tracking_id)
-    screenshot_id, width, height, elements, datalayer, network_tags = await collect_authenticated_page_data(page, url)
+    screenshot_id, width, height, elements, datalayer, network_tags = await collect_authenticated_page_data(
+        page,
+        url,
+        scan_range,
+    )
     elements, datalayer, network_tags = _apply_tracking_id_filter(
         elements, datalayer, network_tags, target_tracking_id
     )

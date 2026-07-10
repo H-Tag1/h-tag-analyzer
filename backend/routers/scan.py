@@ -1,11 +1,12 @@
 import logging
 import time
 import uuid
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
-from models.scan_request import ScanStartRequest
+from models.scan_request import ScanRange, ScanStartRequest
 from services.batch_scan_service import single_scan, batch_scan
 
 router = APIRouter()
@@ -15,14 +16,23 @@ _scan_sessions: dict[str, tuple[float, ScanStartRequest]] = {}
 
 
 @router.get("/scan")
-async def scan(url: str, fullScan: bool = False, trackingId: str = "G-1NWKV3S1TW"):
+async def scan(
+    url: str,
+    fullScan: bool = False,
+    trackingId: str = "G-1NWKV3S1TW",
+    rangePreset: Literal["viewport", "top2", "full", "custom"] = "top2",
+    rangeStartY: Optional[float] = None,
+    rangeEndY: Optional[float] = None,
+):
+    scan_range = ScanRange(preset=rangePreset, startY=rangeStartY, endY=rangeEndY)
+
     async def generator():
         try:
             if fullScan:
-                async for event in batch_scan(url, tracking_id=trackingId):
+                async for event in batch_scan(url, tracking_id=trackingId, scan_range=scan_range):
                     yield {"data": event}
             else:
-                async for event in single_scan(url, tracking_id=trackingId):
+                async for event in single_scan(url, tracking_id=trackingId, scan_range=scan_range):
                     yield {"data": event}
         except Exception as e:
             logger.error(f"Scan error: {e}", exc_info=True)
@@ -58,10 +68,10 @@ async def scan_session_events(scan_id: str):
     async def generator():
         try:
             if payload.fullScan:
-                async for event in batch_scan(payload.url, payload.login, payload.trackingId):
+                async for event in batch_scan(payload.url, payload.login, payload.trackingId, payload.scanRange):
                     yield {"data": event}
             else:
-                async for event in single_scan(payload.url, payload.login, payload.trackingId):
+                async for event in single_scan(payload.url, payload.login, payload.trackingId, payload.scanRange):
                     yield {"data": event}
         except Exception as e:
             logger.error(f"Scan error: {e}", exc_info=True)

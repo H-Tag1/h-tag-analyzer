@@ -53,6 +53,8 @@ export type ScanMode = 'single' | 'batch'
 
 export type LoginMemberType = 'integrated' | 'simple'
 
+export type ScanRangePreset = 'viewport' | 'top2' | 'full' | 'custom'
+
 export interface ScanLoginCredentials {
   enabled: boolean
   memberType: LoginMemberType
@@ -60,11 +62,18 @@ export interface ScanLoginCredentials {
   password: string
 }
 
+export interface ScanRangeOptions {
+  preset: ScanRangePreset
+  startY?: number
+  endY?: number
+}
+
 export interface ScanStartOptions {
   url: string
   fullScan: boolean
   trackingId: string
   login?: ScanLoginCredentials
+  scanRange?: ScanRangeOptions
 }
 
 export const DEFAULT_TRACKING_ID = 'G-1NWKV3S1TW'

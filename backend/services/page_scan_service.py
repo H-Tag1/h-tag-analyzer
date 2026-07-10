@@ -24,7 +24,7 @@ from config import settings
 from models.page_element import PageElement
 from models.bounding_box import BoundingBox
 from models.network_tag_hit import NetworkTagHit
-from models.scan_request import ScanLoginCredentials
+from models.scan_request import ScanLoginCredentials, ScanRange
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 async def collect_page_data(
     url: str,
     login: Optional[ScanLoginCredentials] = None,
+    scan_range: Optional[ScanRange] = None,
 ) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]], List[NetworkTagHit]]:
     """
     Returns: (screenshot_id, width, height, elements, datalayer_events, network_tags)
@@ -56,6 +57,7 @@ async def collect_page_data(
                 page_url=url,
                 collector=collector,
                 exclude_auth_actions=bool(login and login.enabled),
+                scan_range=scan_range,
             )
         finally:
             if collector:
@@ -66,6 +68,7 @@ async def collect_page_data(
 async def collect_authenticated_page_data(
     page: Page,
     url: str,
+    scan_range: Optional[ScanRange] = None,
 ) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]], List[NetworkTagHit]]:
     collector = NetworkTagCollector(page)
     await collector.start()
@@ -79,6 +82,7 @@ async def collect_authenticated_page_data(
             page_url=url,
             collector=collector,
             exclude_auth_actions=True,
+            scan_range=scan_range,
         )
     finally:
         await collector.stop()
@@ -95,19 +99,30 @@ async def _scan_current_page(
     page_url: str,
     collector: NetworkTagCollector,
     exclude_auth_actions: bool,
+    scan_range: Optional[ScanRange] = None,
 ) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]], List[NetworkTagHit]]:
-    elements = await _collect_elements(page, exclude_auth_actions=exclude_auth_actions)
+    elements = await _collect_elements(
+        page,
+        exclude_auth_actions=exclude_auth_actions,
+        scan_range=scan_range,
+    )
     datalayer = await _collect_datalayer(page)
-    screenshot_id, width, height = await _take_screenshot(page)
     elements = apply_static_tracking_detection(elements)
     collector.set_trigger("click")
     elements = await apply_click_tracking_detection(page, elements, page_url, collector)
+    screenshot_id, width, height, screenshot_offset_y = await _take_screenshot(page, scan_range)
+    elements = _shift_elements_to_screenshot(elements, screenshot_offset_y, height)
     network_tags = collector.get_hits()
 
     return screenshot_id, width, height, elements, datalayer, network_tags
 
 
-async def _collect_elements(page: Page, exclude_auth_actions: bool = False) -> List[PageElement]:
+async def _collect_elements(
+    page: Page,
+    exclude_auth_actions: bool = False,
+    scan_range: Optional[ScanRange] = None,
+) -> List[PageElement]:
+    vertical_range = await _resolve_scan_range(page, scan_range)
     raw = await page.evaluate("""() => {
         const TRACKING_ATTR_PREFIXES = ['data-gtm', 'data-ga', 'data-analytics', 'data-track', 'data-event'];
         const TRACKING_ATTR_EXACT = ['data-category', 'data-action', 'data-label', 'data-ecommerce'];
@@ -197,6 +212,9 @@ async def _collect_elements(page: Page, exclude_auth_actions: bool = False) -> L
             continue
 
         bb_data = item.get("bounding_box", {})
+        if vertical_range and not _intersects_vertical_range(bb_data, vertical_range):
+            continue
+
         elements.append(PageElement(
             selector=item["selector"],
             text=item.get("text") or None,
@@ -209,6 +227,41 @@ async def _collect_elements(page: Page, exclude_auth_actions: bool = False) -> L
     return elements
 
 
+async def _resolve_scan_range(page: Page, scan_range: Optional[ScanRange]) -> Optional[Tuple[float, float]]:
+    preset = scan_range.preset if scan_range else "top2"
+    if preset == "full":
+        return None
+
+    viewport_height = await page.evaluate(
+        "() => window.innerHeight || document.documentElement.clientHeight || 0"
+    )
+    viewport_height = float(viewport_height or 0)
+
+    if preset == "viewport":
+        return 0.0, viewport_height
+    if preset == "top2":
+        return 0.0, viewport_height * 2
+    if preset == "custom":
+        start_y = float(scan_range.startY or 0)
+        end_y = float(scan_range.endY or 0)
+        if start_y < 0 or end_y <= start_y:
+            raise ValueError("검사 범위는 0 이상의 시작값과 시작값보다 큰 종료값이 필요합니다.")
+        return start_y, end_y
+
+    return 0.0, viewport_height * 2
+
+
+def _intersects_vertical_range(bb_data: Dict[str, Any], vertical_range: Tuple[float, float]) -> bool:
+    if not bb_data:
+        return False
+
+    start_y, end_y = vertical_range
+    top = float(bb_data.get("y") or 0)
+    height = float(bb_data.get("height") or 0)
+    bottom = top + height
+    return bottom >= start_y and top <= end_y
+
+
 async def _collect_datalayer(page: Page) -> List[Dict[str, Any]]:
     try:
         result = await page.evaluate("() => JSON.parse(JSON.stringify(window.dataLayer || []))")
@@ -217,18 +270,79 @@ async def _collect_datalayer(page: Page) -> List[Dict[str, Any]]:
         return []
 
 
-async def _take_screenshot(page: Page) -> Tuple[str, int, int]:
+async def _take_screenshot(
+    page: Page,
+    scan_range: Optional[ScanRange] = None,
+) -> Tuple[str, int, int, float]:
     screenshot_id = str(uuid.uuid4())
     os.makedirs(settings.screenshot_dir, exist_ok=True)
     path = os.path.join(settings.screenshot_dir, f"{screenshot_id}.png")
 
-    await page.screenshot(path=path, full_page=True, scale="css")
+    clip = await _resolve_screenshot_clip(page, scan_range)
+    if clip:
+        await page.screenshot(path=path, clip=clip, scale="css")
+        screenshot_offset_y = float(clip["y"])
+    else:
+        await page.screenshot(path=path, full_page=True, scale="css")
+        screenshot_offset_y = 0.0
 
     with Image.open(path) as image:
         width, height = image.size
 
     logger.info(f"Screenshot saved: {screenshot_id} ({width}x{height})")
-    return screenshot_id, width, height
+    return screenshot_id, width, height, screenshot_offset_y
+
+
+async def _resolve_screenshot_clip(page: Page, scan_range: Optional[ScanRange]) -> Optional[Dict[str, float]]:
+    vertical_range = await _resolve_scan_range(page, scan_range)
+    if not vertical_range:
+        return None
+
+    metrics = await page.evaluate("""() => ({
+        width: Math.max(
+            document.documentElement.clientWidth || 0,
+            window.innerWidth || 0
+        ),
+        height: Math.max(
+            document.documentElement.scrollHeight || 0,
+            document.body?.scrollHeight || 0,
+            window.innerHeight || 0
+        )
+    })""")
+    page_width = float(metrics.get("width") or 0)
+    page_height = float(metrics.get("height") or 0)
+    start_y, end_y = vertical_range
+    start_y = max(0.0, min(start_y, max(page_height - 1, 0.0)))
+    end_y = max(start_y + 1, min(end_y, page_height))
+
+    return {
+        "x": 0.0,
+        "y": start_y,
+        "width": max(page_width, 1.0),
+        "height": max(end_y - start_y, 1.0),
+    }
+
+
+def _shift_elements_to_screenshot(
+    elements: List[PageElement],
+    offset_y: float,
+    screenshot_height: int,
+) -> List[PageElement]:
+    for element in elements:
+        if not element.bounding_box:
+            continue
+
+        box = element.bounding_box
+        top = max(box.y - offset_y, 0.0)
+        bottom = min(box.y + box.height - offset_y, float(screenshot_height))
+        height = max(bottom - top, 0.0)
+        element.bounding_box = BoundingBox(
+            x=box.x,
+            y=top,
+            width=box.width,
+            height=height,
+        )
+    return elements
 
 
 async def discover_links(url: str, max_pages: int = 20) -> List[str]:

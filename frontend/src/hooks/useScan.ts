@@ -118,6 +118,15 @@ export function useScan() {
           fullScan: String(options.fullScan),
           trackingId: options.trackingId,
         })
+        if (options.scanRange) {
+          qs.set('rangePreset', options.scanRange.preset)
+          if (options.scanRange.startY !== undefined) {
+            qs.set('rangeStartY', String(options.scanRange.startY))
+          }
+          if (options.scanRange.endY !== undefined) {
+            qs.set('rangeEndY', String(options.scanRange.endY))
+          }
+        }
         openStream(`/api/scan?${qs}`)
       } catch (e) {
         setError(e instanceof Error ? e.message : '검사를 시작하지 못했습니다.')
