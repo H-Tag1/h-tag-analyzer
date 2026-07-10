@@ -89,6 +89,7 @@ async def apply_click_tracking_detection(
 
         network_events = _collect_click_network_events(network_collector, network_hit_count_before)
         if not ga_events and not network_events:
+            await _close_click_side_effects(page)
             await _restore_initial_click_state(page, page_url, initial_url, force=page.url != initial_url)
             continue
 
@@ -114,6 +115,7 @@ async def apply_click_tracking_detection(
             await _close_click_side_effects(page)
             await _restore_initial_click_state(page, page_url, initial_url, force=page.url != initial_url)
 
+    await _close_click_side_effects(page)
     return elements
 
 
@@ -212,6 +214,80 @@ async def _close_click_side_effects(page: Page) -> None:
     try:
         await page.keyboard.press("Escape")
         await page.wait_for_timeout(100)
+    except Exception:
+        pass
+
+    try:
+        closed = await page.evaluate("""() => {
+            const closeWords = ['close', '닫기', '×', 'x'];
+            const layerWords = ['search', 'modal', 'layer', 'popup', 'pop', 'dialog'];
+
+            function isVisible(el) {
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return (
+                    rect.width > 0 &&
+                    rect.height > 0 &&
+                    rect.bottom > 0 &&
+                    rect.right > 0 &&
+                    rect.top < window.innerHeight &&
+                    rect.left < window.innerWidth &&
+                    style.display !== 'none' &&
+                    style.visibility !== 'hidden' &&
+                    Number(style.opacity || '1') > 0
+                );
+            }
+
+            function textOf(el) {
+                return [
+                    el.innerText,
+                    el.textContent,
+                    el.value,
+                    el.title,
+                    el.getAttribute('aria-label'),
+                    el.getAttribute('alt'),
+                    el.className,
+                    el.id,
+                ].filter(Boolean).join(' ').trim().toLowerCase();
+            }
+
+            function hasCloseSignal(el) {
+                const text = textOf(el);
+                return closeWords.some(word => text === word || text.includes(word)) ||
+                    /(^|[-_\\s])close($|[-_\\s])|btn[-_]?close|close[-_]?btn/.test(text);
+            }
+
+            function isLayerContext(el) {
+                let node = el;
+                for (let depth = 0; depth < 6 && node; depth++) {
+                    const text = textOf(node);
+                    const rect = node.getBoundingClientRect();
+                    if (
+                        layerWords.some(word => text.includes(word)) ||
+                        node.getAttribute('role') === 'dialog' ||
+                        (rect.width >= window.innerWidth * 0.45 && rect.height >= window.innerHeight * 0.25)
+                    ) {
+                        return true;
+                    }
+                    node = node.parentElement;
+                }
+                return false;
+            }
+
+            const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], [onclick]'))
+                .filter(el => isVisible(el) && hasCloseSignal(el) && isLayerContext(el))
+                .sort((a, b) => {
+                    const ar = a.getBoundingClientRect();
+                    const br = b.getBoundingClientRect();
+                    return (br.top - ar.top) || (br.right - ar.right);
+                });
+
+            if (!candidates.length) return false;
+            candidates[0].click();
+            return true;
+        }""")
+        if closed:
+            await page.wait_for_timeout(200)
     except Exception:
         pass
 
