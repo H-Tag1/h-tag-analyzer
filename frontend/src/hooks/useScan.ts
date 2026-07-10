@@ -138,38 +138,19 @@ export function useScan() {
 
     void (async () => {
       try {
-        if (options.login?.enabled) {
-          const response = await fetch('/api/scan-sessions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(options),
-          })
-
-          if (!response.ok) {
-            const data = await response.json().catch(() => null)
-            throw new Error(data?.detail ?? '검사 세션을 생성하지 못했습니다.')
-          }
-
-          const data: { scanId: string } = await response.json()
-          openStream(`/api/scan-sessions/${data.scanId}/events`)
-          return
-        }
-
-        const qs = new URLSearchParams({
-          url: options.url,
-          fullScan: String(options.fullScan),
-          trackingId: options.trackingId,
+        const response = await fetch('/api/scan-sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(options),
         })
-        if (options.scanRange) {
-          qs.set('rangePreset', options.scanRange.preset)
-          if (options.scanRange.startY !== undefined) {
-            qs.set('rangeStartY', String(options.scanRange.startY))
-          }
-          if (options.scanRange.endY !== undefined) {
-            qs.set('rangeEndY', String(options.scanRange.endY))
-          }
+
+        if (!response.ok) {
+          const data = await response.json().catch(() => null)
+          throw new Error(data?.detail ?? '검사 세션을 생성하지 못했습니다.')
         }
-        openStream(`/api/scan?${qs}`)
+
+        const data: { scanId: string } = await response.json()
+        openStream(`/api/scan-sessions/${data.scanId}/events`)
       } catch (e) {
         setError(e instanceof Error ? e.message : '검사를 시작하지 못했습니다.')
         setStep('error')
