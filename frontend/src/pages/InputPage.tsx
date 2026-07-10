@@ -11,10 +11,10 @@ interface Props {
 
 const HISTORY_KEY = 'htag_url_history'
 const SCAN_RANGE_OPTIONS: { value: ScanRangePreset; label: string }[] = [
-  { value: 'viewport', label: '첫 화면' },
-  { value: 'top2', label: '상단 2화면' },
-  { value: 'full', label: '전체' },
-  { value: 'custom', label: '직접 입력' },
+  { value: 'viewport', label: '현재 화면' },
+  { value: 'top2', label: '상단 영역' },
+  { value: 'full', label: '전체 페이지' },
+  { value: 'custom', label: '구간 지정' },
 ]
 
 export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
