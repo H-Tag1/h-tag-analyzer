@@ -57,6 +57,7 @@ async def goto_scan_target(page: Page, url: str) -> None:
             pass
 
     await page.wait_for_timeout(1000)
+    await _raise_if_web_firewall_blocked(page)
 
 
 def is_auth_related_url(url: str) -> bool:
@@ -92,6 +93,7 @@ async def ensure_target_page(page: Page, target_url: str) -> None:
         pass
 
     await page.wait_for_timeout(1000)
+    await _raise_if_web_firewall_blocked(page)
 
     if "mbshAuca/addLgin" in page.url:
         await _raise_login_error(page)
@@ -110,12 +112,14 @@ async def ensure_target_page(page: Page, target_url: str) -> None:
             pass
 
     await page.wait_for_timeout(1000)
+    await _raise_if_web_firewall_blocked(page)
 
 
 async def _login_pc(page: Page, target_url: str, credentials: ScanLoginCredentials) -> None:
     page.on("dialog", _accept_dialog)
     await page.goto(target_url, wait_until="load", timeout=60000)
     await page.wait_for_timeout(1000)
+    await _raise_if_web_firewall_blocked(page)
 
     login_page = await _open_pc_login_page(page, target_url)
 
@@ -163,6 +167,7 @@ async def _open_pc_login_page(page: Page, target_url: str) -> Page:
 async def _login_mobile(page: Page, target_url: str, credentials: ScanLoginCredentials) -> None:
     page.on("dialog", _accept_dialog)
     await page.goto(_login_url_for(target_url), wait_until="load", timeout=60000)
+    await _raise_if_web_firewall_blocked(page)
     await _submit_login_form(page, credentials)
 
     try:
@@ -201,6 +206,8 @@ async def _wait_for_login_page(page: Page) -> None:
         await page.wait_for_load_state("load", timeout=15000)
     except PlaywrightTimeoutError:
         pass
+
+    await _raise_if_web_firewall_blocked(page)
 
     selectors = ", ".join(candidate["user_selector"] for candidate in _login_form_candidates("integrated"))
     try:
@@ -252,6 +259,8 @@ async def _is_logged_in(page: Page) -> bool:
 
 
 async def _raise_login_error(page: Page) -> None:
+    await _raise_if_web_firewall_blocked(page)
+
     for selector in ("#frmIntgLgin #pError", "#frmGeneLgin #pError", ".t_error2", ".t_error"):
         try:
             text = (await page.locator(selector).first.text_content(timeout=1000) or "").strip()
@@ -261,6 +270,16 @@ async def _raise_login_error(page: Page) -> None:
             continue
 
     raise RuntimeError("로그인에 실패했습니다. ID/PW 또는 추가 인증 필요 여부를 확인해주세요.")
+
+
+async def _raise_if_web_firewall_blocked(page: Page) -> None:
+    try:
+        body_text = await page.evaluate("() => document.body ? document.body.innerText : ''")
+    except PlaywrightError:
+        return
+
+    if "Web firewall security policies" in body_text:
+        raise RuntimeError("현대면세점 보안 정책(WAF)에 의해 페이지 접근이 차단되었습니다. 현재 자동 브라우저에서 해당 페이지를 열 수 없습니다.")
 
 
 def _login_url_for(target_url: str) -> str:
