@@ -102,7 +102,7 @@ export default function IssuePanel({
     return (
       <div className="flex flex-col items-center justify-center h-full text-[#52525B] py-16">
         <Check size={32} className="text-emerald-500 mb-3" />
-        <p className="text-sm">click_ 이벤트 중 ep 파라미터 누락 태그가 없습니다.</p>
+        <p className="text-sm">수정이 필요한 누락 태그가 없습니다.</p>
       </div>
     )
   }

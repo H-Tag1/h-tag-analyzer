@@ -62,6 +62,7 @@ async def apply_click_tracking_detection(
         clicked = await _click_initial_element(page, element)
         if not clicked:
             continue
+        element.click_tested = True
 
         datalayer_after = await _collect_datalayer(page)
         url_after_datalayer = page.url

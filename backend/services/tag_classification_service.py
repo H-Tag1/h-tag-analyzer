@@ -37,6 +37,7 @@ def classify_network_tags(
     tracked_items: List[TrackedAnalysisItem] = []
     issues: List[AiAnalysisItem] = []
     seen_keys: set[str] = set()
+    classified_element_keys: set[str] = set()
 
     click_hits = [
         hit for hit in hits
@@ -72,6 +73,7 @@ def classify_network_tags(
                 tracked_items.append(_to_tracked_item(element, event_name, params, trigger))
             else:
                 issues.append(_to_issue_item(element, event_name, params, missing_fields, trigger))
+            classified_element_keys.add(_element_key(element))
 
     for hit in click_hits:
         event_name = (hit.event_name or "").strip()
@@ -94,6 +96,21 @@ def classify_network_tags(
             tracked_items.append(_to_tracked_item(element, event_name, params, hit.trigger))
         else:
             issues.append(_to_issue_item(element, event_name, params, missing_fields, hit.trigger))
+        if element:
+            classified_element_keys.add(_element_key(element))
+
+    for element in elements or []:
+        if not element.bounding_box or not element.click_tested:
+            continue
+        if element.click_tracking_events:
+            continue
+
+        element_key = _element_key(element)
+        if element_key in classified_element_keys:
+            continue
+
+        issues.append(_to_missing_event_issue_item(element))
+        classified_element_keys.add(element_key)
 
     logger.info(
         "Classified tags: %d network click hits, %d elements -> %d tracked, %d missing",
@@ -250,5 +267,21 @@ def _to_issue_item(
             "event_name": event_name,
             "element_selector": selector if element else "",
             **params,
+        },
+    )
+
+
+def _to_missing_event_issue_item(element: PageElement) -> AiAnalysisItem:
+    return AiAnalysisItem(
+        element_selector=element.selector,
+        element_text=element.text or "",
+        bounding_box=element.bounding_box if element.bounding_box else EMPTY_BOUNDING_BOX,
+        issue="클릭 이벤트 미발생",
+        recommended_ga_spec={
+            "event_name": "",
+            "element_selector": element.selector,
+            "ep_button_area": "",
+            "ep_button_area2": "",
+            "ep_button_name": element.text or "",
         },
     )
