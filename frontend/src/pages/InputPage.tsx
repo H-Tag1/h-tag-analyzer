@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Search, Clock, ArrowRight, ArrowLeft, LockKeyhole, UserRound, Tag, Ruler } from 'lucide-react'
+import { Search, Clock, ArrowRight, ArrowLeft, LockKeyhole, UserRound, Tag, Ruler, Eye, EyeOff } from 'lucide-react'
 import type { LoginMemberType, ScanRangePreset, ScanStartOptions } from '../types'
 import { DEFAULT_TRACKING_ID } from '../types'
 
@@ -24,6 +24,7 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
   const [memberType, setMemberType] = useState<LoginMemberType>('integrated')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [passwordVisible, setPasswordVisible] = useState(false)
   const [scanRangePreset, setScanRangePreset] = useState<ScanRangePreset>('top2')
   const [customStartY, setCustomStartY] = useState('0')
   const [customEndY, setCustomEndY] = useState('1800')
@@ -240,13 +241,22 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
                 <div className="relative">
                   <LockKeyhole size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#52525B]" />
                   <input
-                    type="password"
+                    type={passwordVisible ? 'text' : 'password'}
                     value={password}
                     onChange={e => setPassword(e.target.value)}
                     placeholder="비밀번호"
                     autoComplete="current-password"
-                    className="w-full rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] px-3 py-3 pl-9 text-sm text-white placeholder-[#52525B] transition-all focus:border-purple-600 focus:outline-none focus:ring-1 focus:ring-purple-600"
+                    className="w-full rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] px-3 py-3 pl-9 pr-10 text-sm text-white placeholder-[#52525B] transition-all focus:border-purple-600 focus:outline-none focus:ring-1 focus:ring-purple-600"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setPasswordVisible(v => !v)}
+                    title={passwordVisible ? '비밀번호 숨기기' : '비밀번호 보기'}
+                    aria-label={passwordVisible ? '비밀번호 숨기기' : '비밀번호 보기'}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-2 text-[#52525B] transition-colors hover:bg-white/[0.04] hover:text-white"
+                  >
+                    {passwordVisible ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
                 </div>
               </div>
             </div>
