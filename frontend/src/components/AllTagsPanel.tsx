@@ -12,10 +12,51 @@ function triggerLabel(trigger: string): string {
   return trigger === 'click' ? '클릭' : '페이지 로드'
 }
 
-function eventCategory(eventName?: string | null): string {
-  const name = (eventName || '').toLowerCase()
+const ECOMMERCE_EVENT_NAMES = new Set([
+  'add_payment_info',
+  'add_shipping_info',
+  'add_to_cart',
+  'add_to_wishlist',
+  'begin_checkout',
+  'purchase',
+  'refund',
+  'remove_from_cart',
+  'select_item',
+  'select_promotion',
+  'view_cart',
+  'view_item',
+  'view_item_list',
+  'view_promotion',
+])
+
+const ECOMMERCE_FIELD_PATTERNS = [
+  /^event data \(epn?_items?\)/,
+  /^event data \(epn?_item_/,
+  /^event data \(epn?_promotion_/,
+  /^event data \(epn?_creative_/,
+  /^event data \(epn?_coupon\)/,
+  /^event data \(epn?_currency\)/,
+  /^event data \(epn?_transaction_id\)/,
+  /^event data \(epn?_value\)/,
+  /^event data \(epn?_tax\)/,
+  /^event data \(epn?_shipping\)/,
+  /^event data \(pr\d+/,
+  /^event data \(il\d+/,
+  /^event data \(promo\d+/,
+  /^event data \((cu|tr|ta|tt|ts|pa|ti|ic|in|iv|ip|iq|ca)\)/,
+]
+
+function hasEcommerceFields(tag: NetworkTagHit): boolean {
+  return tag.display_fields.some(field => {
+    const label = field.label.trim().toLowerCase()
+    return ECOMMERCE_FIELD_PATTERNS.some(pattern => pattern.test(label))
+  })
+}
+
+function eventCategory(tag: NetworkTagHit): string {
+  const name = (tag.event_name || '').toLowerCase()
   if (name.startsWith('click_')) return '클릭'
-  if (name.includes('purchase') || name.includes('cart') || name.includes('checkout') || name.startsWith('view_item')) {
+  if (ECOMMERCE_EVENT_NAMES.has(name) || hasEcommerceFields(tag)) {
     return '전자상거래'
   }
   if (name === 'page_view' || name === 'session_start') return '페이지'
@@ -29,7 +70,7 @@ export default function AllTagsPanel({ networkTags, selectedIndex, onSelect }: P
     .map((tag, index) => ({ tag, index }))
     .filter(({ tag }) => {
       if (filter === 'all') return true
-      const category = eventCategory(tag.event_name)
+      const category = eventCategory(tag)
       if (filter === 'click') return category === '클릭'
       if (filter === 'page') return category === '페이지'
       return category === '전자상거래'
@@ -70,7 +111,7 @@ export default function AllTagsPanel({ networkTags, selectedIndex, onSelect }: P
       <div className="flex-1 min-h-0 overflow-y-auto">
         {filtered.map(({ tag, index: originalIndex }) => {
           const isSelected = selectedIndex === originalIndex
-          const category = eventCategory(tag.event_name)
+          const category = eventCategory(tag)
 
           return (
             <div

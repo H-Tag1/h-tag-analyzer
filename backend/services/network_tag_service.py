@@ -195,13 +195,22 @@ def _build_display_fields(params: Dict[str, Any], request_url: str) -> List[Netw
     _append_field(fields, "User Language", params.get("ul"))
 
     event_param_keys = sorted(
-        key for key in params if key.startswith("ep.") or key.startswith("epn.")
+        key for key in params
+        if (
+            key.startswith("ep.")
+            or key.startswith("epn.")
+            or _is_ecommerce_param_key(key)
+        )
     )
     for key in event_param_keys:
         param_name = key.replace(".", "_")
         _append_field(fields, f"Event Data ({param_name})", params.get(key))
 
     return fields
+
+
+def _is_ecommerce_param_key(key: str) -> bool:
+    return bool(re.match(r"^(pr\d+|il\d+|promo\d+|cu|tr|ta|tt|ts|pa|ti|ic|in|iv|ip|iq|ca)$", key))
 
 
 def _append_field(fields: List[NetworkTagDisplayField], label: str, value: Any) -> None:
