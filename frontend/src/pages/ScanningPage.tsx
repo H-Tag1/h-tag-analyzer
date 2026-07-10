@@ -5,6 +5,7 @@ interface Props {
   step: ScanStep
   url: string
   batchProgress: BatchProgress | null
+  progressPercent: number
   onCancel: () => void
 }
 
@@ -17,8 +18,9 @@ const STEPS: { key: ScanStep; label: string; icon: React.ReactNode }[] = [
 
 const ORDER: ScanStep[] = ['loading', 'screenshot', 'collecting', 'ai_analyzing']
 
-export default function ScanningPage({ step, url, batchProgress, onCancel }: Props) {
+export default function ScanningPage({ step, url, batchProgress, progressPercent, onCancel }: Props) {
   const currentIdx = ORDER.indexOf(step)
+  const displayPercent = Math.max(0, Math.min(100, Math.round(progressPercent)))
 
   return (
     <div className="min-h-screen bg-[#0F0F0F] flex flex-col items-center justify-center px-4">
@@ -35,6 +37,19 @@ export default function ScanningPage({ step, url, batchProgress, onCancel }: Pro
           {batchProgress ? '전체 도메인 스캔 중' : 'AI 분석 중'}
         </h2>
         <p className="text-[#52525B] text-sm mb-8 truncate max-w-xs mx-auto" title={url}>{url}</p>
+
+        <div className="mb-6">
+          <div className="mb-2 flex items-center justify-between text-xs">
+            <span className="text-[#71717A]">진행률</span>
+            <span className="font-mono text-purple-300">{displayPercent}%</span>
+          </div>
+          <div className="h-2 bg-[#2A2A2A] rounded-full overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-purple-600 to-blue-600 rounded-full transition-all duration-500"
+              style={{ width: `${displayPercent}%` }}
+            />
+          </div>
+        </div>
 
         {batchProgress && (
           <div className="mb-6">

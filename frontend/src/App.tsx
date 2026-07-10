@@ -14,7 +14,7 @@ export default function App() {
   const [targetUrl, setTargetUrl] = useState('')
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null)
   const [mainSection, setMainSection] = useState<MainSection>('scan')
-  const { step, error, pages, historyId, batchProgress, start, reset } = useScan()
+  const { step, error, pages, historyId, batchProgress, progressPercent, start, reset } = useScan()
 
   const handleStart = (options: ScanStartOptions) => {
     setTargetUrl(options.url)
@@ -75,6 +75,7 @@ export default function App() {
         step={step}
         url={targetUrl}
         batchProgress={batchProgress}
+        progressPercent={progressPercent}
         onCancel={handleScanBack}
       />
     )
