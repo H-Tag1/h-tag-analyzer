@@ -75,7 +75,7 @@ export function useScan() {
             break
           case 'elements_collected':
             setStep('collecting')
-            setProgressPercent(prev => Math.max(prev, 90))
+            setProgressPercent(prev => Math.max(prev, 55))
             break
           case 'ai_analyzing':
             setStep('ai_analyzing')

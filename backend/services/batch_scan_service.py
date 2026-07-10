@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from typing import AsyncGenerator, List, Optional
@@ -69,17 +70,33 @@ async def single_scan(
     yield json.dumps({"type": "scan_start", "url": url, "mode": "single"})
 
     target_tracking_id = normalize_tracking_id(tracking_id)
-    screenshot_id, width, height, elements, datalayer, network_tags = await collect_page_data(
+    progress_queue: asyncio.Queue[dict] = asyncio.Queue()
+
+    async def report_progress(event: dict) -> None:
+        await progress_queue.put(event)
+
+    collect_task = asyncio.create_task(collect_page_data(
         url,
         login,
         scan_range,
-    )
+        report_progress,
+    ))
+
+    while not collect_task.done():
+        try:
+            event = await asyncio.wait_for(progress_queue.get(), timeout=0.2)
+            yield json.dumps(event)
+        except asyncio.TimeoutError:
+            continue
+
+    while not progress_queue.empty():
+        yield json.dumps(progress_queue.get_nowait())
+
+    screenshot_id, width, height, elements, datalayer, network_tags = await collect_task
     elements, datalayer, network_tags = _apply_tracking_id_filter(
         elements, datalayer, network_tags, target_tracking_id
     )
 
-    yield json.dumps({"type": "screenshot_done", "screenshotId": screenshot_id, "width": width, "height": height})
-    yield json.dumps({"type": "elements_collected", "count": len(elements)})
     yield json.dumps({"type": "ai_analyzing"})
 
     page_data = _assemble_page_data(

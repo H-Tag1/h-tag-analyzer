@@ -1,4 +1,4 @@
-import { Loader, Camera, Cpu, Globe } from 'lucide-react'
+import { Activity, Cpu, Globe, MousePointerClick } from 'lucide-react'
 import type { ScanStep, BatchProgress } from '../hooks/useScan'
 
 interface Props {
@@ -10,17 +10,18 @@ interface Props {
 }
 
 const STEPS: { key: ScanStep; label: string; icon: React.ReactNode }[] = [
-  { key: 'loading',      label: '페이지 로딩 중',        icon: <Globe size={16} /> },
-  { key: 'screenshot',   label: '스크린샷 캡처 완료',    icon: <Camera size={16} /> },
-  { key: 'collecting',   label: '인터랙션 요소 수집 중', icon: <Loader size={16} className="animate-spin" /> },
-  { key: 'ai_analyzing', label: 'AI 분석 중',            icon: <Cpu size={16} /> },
+  { key: 'loading',      label: '페이지 접속 중',     icon: <Globe size={16} /> },
+  { key: 'collecting',   label: '클릭 요소 확인 중',  icon: <MousePointerClick size={16} /> },
+  { key: 'screenshot',   label: 'GA 이벤트 수집 중',  icon: <Activity size={16} /> },
+  { key: 'ai_analyzing', label: '분석 결과 생성 중',  icon: <Cpu size={16} /> },
 ]
 
-const ORDER: ScanStep[] = ['loading', 'screenshot', 'collecting', 'ai_analyzing']
+const ORDER: ScanStep[] = ['loading', 'collecting', 'screenshot', 'ai_analyzing']
 
 export default function ScanningPage({ step, url, batchProgress, progressPercent, onCancel }: Props) {
   const currentIdx = ORDER.indexOf(step)
   const displayPercent = Math.max(0, Math.min(100, Math.round(progressPercent)))
+  const activeStepLabel = STEPS.find(s => s.key === step)?.label ?? '검사 진행 중'
 
   return (
     <div className="min-h-screen bg-[#0F0F0F] flex flex-col items-center justify-center px-4">
@@ -34,7 +35,7 @@ export default function ScanningPage({ step, url, batchProgress, progressPercent
         </div>
 
         <h2 className="text-2xl font-bold text-white mb-2">
-          {batchProgress ? '전체 도메인 스캔 중' : 'AI 분석 중'}
+          {batchProgress ? '전체 도메인 스캔 중' : activeStepLabel}
         </h2>
         <p className="text-[#52525B] text-sm mb-8 truncate max-w-xs mx-auto" title={url}>{url}</p>
 

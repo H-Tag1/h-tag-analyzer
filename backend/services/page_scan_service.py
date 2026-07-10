@@ -1,7 +1,7 @@
 import uuid
 import os
 import logging
-from typing import List, Dict, Any, Tuple, Optional
+from typing import Awaitable, Callable, List, Dict, Any, Tuple, Optional
 from urllib.parse import urlparse, urlunparse
 
 from PIL import Image
@@ -27,12 +27,14 @@ from models.network_tag_hit import NetworkTagHit
 from models.scan_request import ScanLoginCredentials, ScanRange
 
 logger = logging.getLogger(__name__)
+ProgressReporter = Callable[[Dict[str, Any]], Awaitable[None]]
 
 
 async def collect_page_data(
     url: str,
     login: Optional[ScanLoginCredentials] = None,
     scan_range: Optional[ScanRange] = None,
+    progress: Optional[ProgressReporter] = None,
 ) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]], List[NetworkTagHit]]:
     """
     Returns: (screenshot_id, width, height, elements, datalayer_events, network_tags)
@@ -58,6 +60,7 @@ async def collect_page_data(
                 collector=collector,
                 exclude_auth_actions=bool(login and login.enabled),
                 scan_range=scan_range,
+                progress=progress,
             )
         finally:
             if collector:
@@ -69,6 +72,7 @@ async def collect_authenticated_page_data(
     page: Page,
     url: str,
     scan_range: Optional[ScanRange] = None,
+    progress: Optional[ProgressReporter] = None,
 ) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]], List[NetworkTagHit]]:
     collector = NetworkTagCollector(page)
     await collector.start()
@@ -83,6 +87,7 @@ async def collect_authenticated_page_data(
             collector=collector,
             exclude_auth_actions=True,
             scan_range=scan_range,
+            progress=progress,
         )
     finally:
         await collector.stop()
@@ -100,21 +105,34 @@ async def _scan_current_page(
     collector: NetworkTagCollector,
     exclude_auth_actions: bool,
     scan_range: Optional[ScanRange] = None,
+    progress: Optional[ProgressReporter] = None,
 ) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]], List[NetworkTagHit]]:
     elements = await _collect_elements(
         page,
         exclude_auth_actions=exclude_auth_actions,
         scan_range=scan_range,
     )
+    await _report_progress(progress, {"type": "elements_collected", "count": len(elements)})
     datalayer = await _collect_datalayer(page)
     elements = apply_static_tracking_detection(elements)
     collector.set_trigger("click")
     elements = await apply_click_tracking_detection(page, elements, page_url, collector)
     screenshot_id, width, height, screenshot_offset_y = await _take_screenshot(page, scan_range)
+    await _report_progress(progress, {
+        "type": "screenshot_done",
+        "screenshotId": screenshot_id,
+        "width": width,
+        "height": height,
+    })
     elements = _shift_elements_to_screenshot(elements, screenshot_offset_y, height)
     network_tags = collector.get_hits()
 
     return screenshot_id, width, height, elements, datalayer, network_tags
+
+
+async def _report_progress(progress: Optional[ProgressReporter], event: Dict[str, Any]) -> None:
+    if progress:
+        await progress(event)
 
 
 async def _collect_elements(
