@@ -16,6 +16,11 @@ export interface BatchProgress {
   currentUrl: string
 }
 
+export interface InteractionProgress {
+  current: number
+  total: number
+}
+
 const MAX_ESTIMATED_PROGRESS = 90
 
 export function useScan() {
@@ -24,6 +29,7 @@ export function useScan() {
   const [pages, setPages] = useState<PageScanData[]>([])
   const [historyId, setHistoryId] = useState<string | null>(null)
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null)
+  const [interactionProgress, setInteractionProgress] = useState<InteractionProgress | null>(null)
   const [progressPercent, setProgressPercent] = useState(0)
   const esRef = useRef<EventSource | null>(null)
   const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -53,6 +59,7 @@ export function useScan() {
     setPages([])
     setHistoryId(null)
     setBatchProgress(null)
+    setInteractionProgress(null)
     setProgressPercent(3)
     startEstimatedProgress()
 
@@ -71,14 +78,29 @@ export function useScan() {
             break
           case 'screenshot_done':
             setStep('screenshot')
+            setInteractionProgress(null)
             setProgressPercent(prev => Math.max(prev, 82))
             break
           case 'elements_collected':
             setStep('collecting')
-            setProgressPercent(prev => Math.max(prev, 55))
+            setProgressPercent(prev => Math.max(prev, 10))
             break
+          case 'click_scan_start':
+            stopEstimatedProgress()
+            setStep('collecting')
+            setInteractionProgress({ current: event.current, total: event.total })
+            setProgressPercent(prev => Math.max(prev, 12))
+            break
+          case 'click_scan_progress': {
+            const ratio = event.total > 0 ? event.current / event.total : 1
+            setStep('collecting')
+            setInteractionProgress({ current: event.current, total: event.total })
+            setProgressPercent(Math.max(12, Math.min(82, Math.round(12 + ratio * 70))))
+            break
+          }
           case 'ai_analyzing':
             setStep('ai_analyzing')
+            setInteractionProgress(null)
             setProgressPercent(prev => Math.max(prev, 96))
             break
           case 'scan_complete':
@@ -93,6 +115,7 @@ export function useScan() {
           case 'pages_discovered':
             stopEstimatedProgress()
             setBatchProgress({ current: 0, total: event.total, currentUrl: '' })
+            setInteractionProgress(null)
             setProgressPercent(5)
             break
           case 'page_start':
@@ -167,8 +190,9 @@ export function useScan() {
     setPages([])
     setHistoryId(null)
     setBatchProgress(null)
+    setInteractionProgress(null)
     setProgressPercent(0)
   }, [stopEstimatedProgress])
 
-  return { step, error, pages, historyId, batchProgress, progressPercent, start, reset }
+  return { step, error, pages, historyId, batchProgress, interactionProgress, progressPercent, start, reset }
 }

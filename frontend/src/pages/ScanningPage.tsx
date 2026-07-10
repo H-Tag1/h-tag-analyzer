@@ -1,10 +1,11 @@
 import { Activity, Cpu, Globe, MousePointerClick } from 'lucide-react'
-import type { ScanStep, BatchProgress } from '../hooks/useScan'
+import type { ScanStep, BatchProgress, InteractionProgress } from '../hooks/useScan'
 
 interface Props {
   step: ScanStep
   url: string
   batchProgress: BatchProgress | null
+  interactionProgress: InteractionProgress | null
   progressPercent: number
   onCancel: () => void
 }
@@ -18,10 +19,13 @@ const STEPS: { key: ScanStep; label: string; icon: React.ReactNode }[] = [
 
 const ORDER: ScanStep[] = ['loading', 'collecting', 'screenshot', 'ai_analyzing']
 
-export default function ScanningPage({ step, url, batchProgress, progressPercent, onCancel }: Props) {
+export default function ScanningPage({ step, url, batchProgress, interactionProgress, progressPercent, onCancel }: Props) {
   const currentIdx = ORDER.indexOf(step)
   const displayPercent = Math.max(0, Math.min(100, Math.round(progressPercent)))
   const activeStepLabel = STEPS.find(s => s.key === step)?.label ?? '검사 진행 중'
+  const interactionPercent = interactionProgress && interactionProgress.total > 0
+    ? Math.round((interactionProgress.current / interactionProgress.total) * 100)
+    : 0
 
   return (
     <div className="min-h-screen bg-[#0F0F0F] flex flex-col items-center justify-center px-4">
@@ -44,6 +48,14 @@ export default function ScanningPage({ step, url, batchProgress, progressPercent
             <span className="text-[#71717A]">진행률</span>
             <span className="font-mono text-purple-300">{displayPercent}%</span>
           </div>
+          {interactionProgress && step === 'collecting' && (
+            <div className="mb-2 flex items-center justify-between text-xs text-[#71717A]">
+              <span>클릭 요소</span>
+              <span className="font-mono">
+                {interactionProgress.current} / {interactionProgress.total}개 ({interactionPercent}%)
+              </span>
+            </div>
+          )}
           <div className="h-2 bg-[#2A2A2A] rounded-full overflow-hidden">
             <div
               className="h-full bg-gradient-to-r from-purple-600 to-blue-600 rounded-full transition-all duration-500"
@@ -85,7 +97,13 @@ export default function ScanningPage({ step, url, batchProgress, progressPercent
                   ) : s.icon}
                 </span>
                 <span>{s.label}</span>
-                {isActive && <span className="ml-auto text-xs text-[#52525B] animate-pulse">진행 중</span>}
+                {isActive && (
+                  <span className="ml-auto text-xs text-[#52525B] animate-pulse">
+                    {s.key === 'collecting' && interactionProgress
+                      ? `${interactionProgress.current}/${interactionProgress.total}`
+                      : '진행 중'}
+                  </span>
+                )}
               </div>
             )
           })}

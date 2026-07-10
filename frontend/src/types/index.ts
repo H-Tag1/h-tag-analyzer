@@ -107,6 +107,8 @@ export type ScanEventType =
   | { type: 'scan_start'; url: string; mode: ScanMode }
   | { type: 'screenshot_done'; screenshotId: string; width: number; height: number }
   | { type: 'elements_collected'; count: number }
+  | { type: 'click_scan_start'; current: number; total: number }
+  | { type: 'click_scan_progress'; current: number; total: number }
   | { type: 'ai_analyzing' }
   | { type: 'scan_complete'; data: PageScanData; history_id?: string }
   | { type: 'pages_discovered'; urls: string[]; total: number }

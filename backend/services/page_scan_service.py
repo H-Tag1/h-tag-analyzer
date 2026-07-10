@@ -116,7 +116,7 @@ async def _scan_current_page(
     datalayer = await _collect_datalayer(page)
     elements = apply_static_tracking_detection(elements)
     collector.set_trigger("click")
-    elements = await apply_click_tracking_detection(page, elements, page_url, collector)
+    elements = await apply_click_tracking_detection(page, elements, page_url, collector, progress=progress)
     screenshot_id, width, height, screenshot_offset_y = await _take_screenshot(page, scan_range)
     await _report_progress(progress, {
         "type": "screenshot_done",

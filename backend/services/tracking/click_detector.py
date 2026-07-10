@@ -1,7 +1,7 @@
 import json
 import logging
 from collections import Counter
-from typing import Any, Dict, List, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from playwright.async_api import Page
 
@@ -15,6 +15,7 @@ from services.tracking.tracking_data import merge_tracking_data
 
 
 logger = logging.getLogger(__name__)
+ProgressReporter = Callable[[Dict[str, Any]], Awaitable[None]]
 
 CLICK_EVENT_WAIT_MS = 1200
 CLICK_EVENT_POLL_MS = 100
@@ -44,6 +45,7 @@ async def apply_click_tracking_detection(
     elements: List[PageElement],
     page_url: str,
     network_collector=None,
+    progress: Optional[ProgressReporter] = None,
 ) -> List[PageElement]:
     candidates = [
         element
@@ -52,71 +54,91 @@ async def apply_click_tracking_detection(
     ]
     candidates.sort(key=_click_priority)
     initial_url = page.url or page_url
+    total_candidates = len(candidates)
+    completed_candidates = 0
+    await _report_progress(progress, {
+        "type": "click_scan_start",
+        "current": completed_candidates,
+        "total": total_candidates,
+    })
 
     for element in candidates:
-        await _restore_initial_click_state(page, page_url, initial_url)
-        url_before = page.url
-        datalayer_before = await _collect_datalayer(page)
-        network_hit_count_before = len(network_collector.get_hits()) if network_collector else 0
+        try:
+            await _restore_initial_click_state(page, page_url, initial_url)
+            url_before = page.url
+            datalayer_before = await _collect_datalayer(page)
+            network_hit_count_before = len(network_collector.get_hits()) if network_collector else 0
 
-        clicked = await _click_initial_element(page, element)
-        if not clicked:
-            continue
-        element.click_tested = True
+            clicked = await _click_initial_element(page, element)
+            if not clicked:
+                continue
+            element.click_tested = True
 
-        datalayer_after = await _collect_datalayer(page)
-        url_after_datalayer = page.url
-        new_events = (
-            _diff_datalayer(datalayer_before, datalayer_after)
-            if url_after_datalayer == url_before
-            else []
-        )
+            datalayer_after = await _collect_datalayer(page)
+            url_after_datalayer = page.url
+            new_events = (
+                _diff_datalayer(datalayer_before, datalayer_after)
+                if url_after_datalayer == url_before
+                else []
+            )
 
-        await _wait_for_click_events(page, datalayer_before, network_collector, network_hit_count_before)
-        datalayer_after = await _collect_datalayer(page)
-        url_after_datalayer = page.url
-        new_events = (
-            _diff_datalayer(datalayer_before, datalayer_after)
-            if url_after_datalayer == url_before
-            else new_events
-        )
+            await _wait_for_click_events(page, datalayer_before, network_collector, network_hit_count_before)
+            datalayer_after = await _collect_datalayer(page)
+            url_after_datalayer = page.url
+            new_events = (
+                _diff_datalayer(datalayer_before, datalayer_after)
+                if url_after_datalayer == url_before
+                else new_events
+            )
 
-        ga_events = [
-            event
-            for event in new_events
-            if isinstance(event, dict) and _is_ga_tracking_event(event) and not is_ignored_datalayer_event(event)
-        ]
+            ga_events = [
+                event
+                for event in new_events
+                if isinstance(event, dict) and _is_ga_tracking_event(event) and not is_ignored_datalayer_event(event)
+            ]
 
-        network_events = _collect_click_network_events(network_collector, network_hit_count_before)
-        if not ga_events and not network_events:
-            await _close_click_side_effects(page)
-            await _restore_initial_click_state(page, page_url, initial_url, force=page.url != initial_url)
-            continue
+            network_events = _collect_click_network_events(network_collector, network_hit_count_before)
+            if not ga_events and not network_events:
+                await _close_click_side_effects(page)
+                await _restore_initial_click_state(page, page_url, initial_url, force=page.url != initial_url)
+                continue
 
-        normalized_events = [_normalize_tracking_event(event) for event in ga_events]
-        normalized_events.extend(network_events)
-        normalized_events.sort(key=_tracking_event_priority)
-        element.click_tracking_events.extend(normalized_events)
-        element.has_ga_tag = True
-        if "click_datalayer" not in element.tracking_methods:
-            element.tracking_methods.append("click_datalayer")
-        element.tracking_data = merge_tracking_data(element.tracking_data, normalized_events[0])
+            normalized_events = [_normalize_tracking_event(event) for event in ga_events]
+            normalized_events.extend(network_events)
+            normalized_events.sort(key=_tracking_event_priority)
+            element.click_tracking_events.extend(normalized_events)
+            element.has_ga_tag = True
+            if "click_datalayer" not in element.tracking_methods:
+                element.tracking_methods.append("click_datalayer")
+            element.tracking_data = merge_tracking_data(element.tracking_data, normalized_events[0])
 
-        logger.info(
-            "Click tracking detected on %s (%s): %s",
-            element.selector,
-            element.text,
-            normalized_events[0].get("event_name") or normalized_events[0].get("event"),
-        )
+            logger.info(
+                "Click tracking detected on %s (%s): %s",
+                element.selector,
+                element.text,
+                normalized_events[0].get("event_name") or normalized_events[0].get("event"),
+            )
 
-        if _should_reset_page_after_click(normalized_events):
-            await _restore_initial_click_state(page, page_url, initial_url, force=True)
-        else:
-            await _close_click_side_effects(page)
-            await _restore_initial_click_state(page, page_url, initial_url, force=page.url != initial_url)
+            if _should_reset_page_after_click(normalized_events):
+                await _restore_initial_click_state(page, page_url, initial_url, force=True)
+            else:
+                await _close_click_side_effects(page)
+                await _restore_initial_click_state(page, page_url, initial_url, force=page.url != initial_url)
+        finally:
+            completed_candidates += 1
+            await _report_progress(progress, {
+                "type": "click_scan_progress",
+                "current": completed_candidates,
+                "total": total_candidates,
+            })
 
     await _close_click_side_effects(page)
     return elements
+
+
+async def _report_progress(progress: Optional[ProgressReporter], event: Dict[str, Any]) -> None:
+    if progress:
+        await progress(event)
 
 
 def _click_priority(element: PageElement) -> Tuple[int, int, int, int]:
