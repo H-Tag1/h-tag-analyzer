@@ -200,7 +200,7 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
             <LockKeyhole size={16} className={loginEnabled ? 'text-purple-400' : 'text-[#52525B]'} />
             <div>
               <p className="text-sm font-medium text-white">로그인 후 검사</p>
-              <p className="text-xs text-[#52525B]">국문 PC/MO ID/PW 로그인 후 해당 화면을 검사합니다</p>
+              <p className="text-xs text-[#52525B]">면세점 채널 ID/PW 로그인 후 해당 화면을 검사합니다</p>
             </div>
           </button>
 

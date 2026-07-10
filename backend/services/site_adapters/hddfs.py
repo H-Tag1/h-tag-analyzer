@@ -14,7 +14,42 @@ MOBILE_USER_AGENT = (
     "Mobile/15E148 Safari/604.1"
 )
 AUTH_EXCLUDED_PATH_PARTS = ("/mm/mbshAuca/", "/mm/mbshJoin/")
-AUTH_EXCLUDED_TEXTS = {"로그인", "로그아웃", "회원가입"}
+AUTH_EXCLUDED_TEXTS = {
+    "로그인",
+    "로그아웃",
+    "회원가입",
+    "sign-in",
+    "sign in",
+    "sign-out",
+    "sign out",
+    "logout",
+    "join",
+    "登录",
+    "退出",
+    "注销",
+    "注册",
+}
+LOGIN_TEXTS = ("로그인", "Sign-in", "Sign in", "登录")
+LOGOUT_TEXTS = ("로그아웃", "Sign-out", "Sign out", "Logout", "退出", "注销")
+MEMBER_TAB_TEXTS = {
+    "integrated": (
+        "H.Point통합회원",
+        "H.Point 통합회원",
+        "H.Point Integrated membership",
+        "H.Point Integrated",
+        "H.Point通用会员",
+        "H.Point 通用会员",
+        "H. Point 通用会员",
+    ),
+    "simple": (
+        "면세점간편회원",
+        "면세점 간편회원",
+        "Exclusive Duty Free member",
+        "Exclusive Duty Free",
+        "Exclusive",
+        "免税店专用会员",
+    ),
+}
 
 
 async def new_scan_page(browser: Browser, url: str) -> Page:
@@ -72,7 +107,7 @@ def is_auth_action_element(item: Dict[str, Any]) -> bool:
     text = (item.get("text") or "").strip()
     selector = (item.get("selector") or "").strip()
 
-    if text in AUTH_EXCLUDED_TEXTS:
+    if _normalize_text(text) in {_normalize_text(value) for value in AUTH_EXCLUDED_TEXTS}:
         return True
 
     return selector == "#loginBtn" or "menu_login_join" in selector
@@ -152,7 +187,7 @@ async def _open_pc_login_page(page: Page, target_url: str) -> Page:
 
     try:
         async with page.expect_popup(timeout=15000) as popup_info:
-            await page.get_by_text("로그인", exact=True).first.click()
+            await _click_first_text(page, LOGIN_TEXTS)
         login_page = await popup_info.value
         await _wait_for_login_page(login_page)
         return login_page
@@ -217,14 +252,15 @@ async def _wait_for_login_page(page: Page) -> None:
 
 
 async def _activate_login_member_tab(page: Page, member_type: str) -> None:
-    tab_text = "면세점간편회원" if member_type == "simple" else "H.Point통합회원"
-    try:
-        tab = page.get_by_text(tab_text, exact=True).first
-        if await tab.is_visible(timeout=1000):
-            await tab.click()
-            await page.wait_for_timeout(300)
-    except (PlaywrightError, PlaywrightTimeoutError):
-        pass
+    for tab_text in MEMBER_TAB_TEXTS["simple" if member_type == "simple" else "integrated"]:
+        try:
+            tab = page.get_by_text(tab_text, exact=False).first
+            if await tab.is_visible(timeout=1000):
+                await tab.click()
+                await page.wait_for_timeout(300)
+                return
+        except (PlaywrightError, PlaywrightTimeoutError):
+            continue
 
 
 def _login_form_candidates(member_type: str) -> List[Dict[str, str]]:
@@ -253,9 +289,13 @@ async def _is_logged_in(page: Page) -> bool:
         pass
 
     try:
-        return await page.locator("text=로그아웃").count() > 0
+        for text in LOGOUT_TEXTS:
+            if await page.get_by_text(text, exact=False).count() > 0:
+                return True
     except Exception:
-        return False
+        pass
+
+    return False
 
 
 async def _raise_login_error(page: Page) -> None:
@@ -293,6 +333,26 @@ def _same_host(current_url: str, target_url: str) -> bool:
         return (urlparse(current_url).hostname or "").lower() == (urlparse(target_url).hostname or "").lower()
     except Exception:
         return False
+
+
+async def _click_first_text(page: Page, text_candidates: tuple[str, ...]) -> None:
+    last_error = None
+    for text in text_candidates:
+        try:
+            item = page.get_by_text(text, exact=False).first
+            if await item.is_visible(timeout=1000):
+                await item.click()
+                return
+        except (PlaywrightError, PlaywrightTimeoutError) as exc:
+            last_error = exc
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("클릭할 로그인 항목을 찾지 못했습니다.")
+
+
+def _normalize_text(value: str) -> str:
+    return "".join(value.strip().lower().split())
 
 
 def _accept_dialog(dialog) -> None:
