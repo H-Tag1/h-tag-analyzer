@@ -45,7 +45,7 @@ function statusClasses(item: TagRequestValidationItem) {
 }
 
 function itemTitle(item: TagRequestValidationItem) {
-  return item.request.ep_button_name || item.request.ep_button_area2 || item.request.event_name
+  return item.matched_tag?.ep_button_name || item.request.ep_button_name || item.request.ep_button_area2 || item.request.event_name
 }
 
 function filteredItems(sheet: TagRequestSheetResult, tab: PanelTab) {
@@ -63,6 +63,56 @@ function MissingFields({ fields }: { fields: string[] }) {
           {PARAM_LABELS[field] ?? field}
         </span>
       ))}
+    </div>
+  )
+}
+
+function ParamComparison({ item }: { item: TagRequestValidationItem }) {
+  return (
+    <div className="mt-3 space-y-2 text-xs">
+      {[
+        ['ep_button_area', item.request.ep_button_area, item.matched_tag?.ep_button_area],
+        ['ep_button_area2', item.request.ep_button_area2, item.matched_tag?.ep_button_area2],
+        ['ep_button_name', item.request.ep_button_name, item.matched_tag?.ep_button_name],
+      ].map(([label, expected, actual]) => (
+        <div key={label} className="rounded-lg bg-[#101010] px-3 py-2">
+          <dt className="mb-1 text-[#52525B]">{label}</dt>
+          <dd className="space-y-1">
+            <div className="grid grid-cols-[44px_1fr] gap-2">
+              <span className="text-[#71717A]">문서</span>
+              <span className="truncate text-[#E4E4E7]" title={expected}>{expected || '-'}</span>
+            </div>
+            <div className="grid grid-cols-[44px_1fr] gap-2">
+              <span className="text-[#71717A]">실제</span>
+              <span className={actual ? 'truncate text-emerald-300' : 'text-[#52525B]'} title={actual}>
+                {actual || '-'}
+              </span>
+            </div>
+          </dd>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function Substitutions({ item }: { item: TagRequestValidationItem }) {
+  if (!item.substitutions.length) return null
+
+  return (
+    <div className="mt-3 rounded-lg border border-purple-500/20 bg-purple-950/10 px-3 py-2">
+      <p className="mb-2 text-[11px] text-purple-300">치환값</p>
+      <div className="space-y-1">
+        {item.substitutions.map((substitution, index) => (
+          <div key={`${substitution.field}-${substitution.placeholder}-${index}`} className="grid grid-cols-[88px_1fr] gap-2 text-xs">
+            <span className="truncate text-[#A78BFA]" title={substitution.placeholder}>
+              {substitution.placeholder}
+            </span>
+            <span className="truncate text-[#E4E4E7]" title={substitution.value}>
+              {substitution.value || '-'}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -306,22 +356,17 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
                         {statusLabel(item)}
                       </span>
                       <span className="text-xs text-[#71717A]">요청 {item.request.request_no}</span>
+                      {item.match_source === 'ai' && (
+                        <span className="rounded border border-purple-500/30 bg-purple-950/30 px-1.5 py-0.5 text-[10px] text-purple-200">
+                          AI 위치
+                        </span>
+                      )}
                       {!item.bounding_box && <span className="ml-auto text-[10px] text-[#52525B]">화면 위치 없음</span>}
                     </div>
                     <p className="truncate text-sm font-medium text-white">{itemTitle(item)}</p>
                     <p className="mt-1 truncate font-mono text-xs text-[#71717A]">{item.request.event_name}</p>
-                    <dl className="mt-3 space-y-1.5 text-xs">
-                      {[
-                        ['ep_button_area', item.request.ep_button_area],
-                        ['ep_button_area2', item.request.ep_button_area2],
-                        ['ep_button_name', item.request.ep_button_name],
-                      ].map(([label, value]) => (
-                        <div key={label} className="grid grid-cols-[96px_1fr] gap-2">
-                          <dt className="text-[#52525B]">{label}</dt>
-                          <dd className="truncate text-[#E4E4E7]" title={value}>{value || '-'}</dd>
-                        </div>
-                      ))}
-                    </dl>
+                    <ParamComparison item={item} />
+                    <Substitutions item={item} />
                     <MissingFields fields={item.missing_fields} />
                   </button>
                 )

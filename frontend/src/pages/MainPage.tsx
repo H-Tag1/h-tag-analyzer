@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertCircle, CheckCircle2, ClipboardList, FileSpreadsheet, Loader2, SearchCheck, Upload, WandSparkles } from 'lucide-react'
 import InputPage from './InputPage'
 import ReportTable from '../components/ReportTable'
@@ -19,22 +19,70 @@ const NAV_ITEMS: { key: MainSection; label: string; icon: typeof SearchCheck }[]
   { key: 'report', label: '실행 리포트', icon: ClipboardList },
 ]
 
+const TAG_REQUEST_FILE_EXTENSIONS = ['.xlsx', '.xls', '.csv']
+
+function isSupportedTagRequestFile(file: File) {
+  const fileName = file.name.toLowerCase()
+  return TAG_REQUEST_FILE_EXTENSIONS.some((extension) => fileName.endsWith(extension))
+}
+
 export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagRequestValidated, initialSection = 'scan' }: Props) {
   const [activeSection, setActiveSection] = useState<MainSection>(initialSection)
   const [uploadedFileName, setUploadedFileName] = useState('')
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
+  const [isDraggingFile, setIsDraggingFile] = useState(false)
   const [isValidatingTagRequest, setIsValidatingTagRequest] = useState(false)
   const [tagRequestError, setTagRequestError] = useState<string | null>(null)
+  const dragDepthRef = useRef(0)
 
   useEffect(() => {
     setActiveSection(initialSection)
   }, [initialSection])
 
-  const handleExcelUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    setUploadedFile(file ?? null)
+  const applyUploadedFile = (file: File | null) => {
+    if (file && !isSupportedTagRequestFile(file)) {
+      setTagRequestError('.xlsx, .xls, .csv 파일만 업로드할 수 있습니다.')
+      return
+    }
+
+    setUploadedFile(file)
     setUploadedFileName(file?.name ?? '')
     setTagRequestError(null)
+  }
+
+  const handleExcelUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    applyUploadedFile(event.target.files?.[0] ?? null)
+    event.target.value = ''
+  }
+
+  const handleDragEnter = (event: React.DragEvent<HTMLLabelElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    dragDepthRef.current += 1
+    setIsDraggingFile(true)
+  }
+
+  const handleDragOver = (event: React.DragEvent<HTMLLabelElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'copy'
+  }
+
+  const handleDragLeave = (event: React.DragEvent<HTMLLabelElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) {
+      setIsDraggingFile(false)
+    }
+  }
+
+  const handleDrop = (event: React.DragEvent<HTMLLabelElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    dragDepthRef.current = 0
+    setIsDraggingFile(false)
+    applyUploadedFile(event.dataTransfer.files?.[0] ?? null)
   }
 
   const handleValidateTagRequest = async () => {
@@ -128,23 +176,35 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagReques
               <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#151515]/90 shadow-2xl shadow-purple-950/10">
                 <label
                   htmlFor="new-tag-excel"
+                  onDragEnter={handleDragEnter}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
                   className={`group flex min-h-[220px] cursor-pointer flex-col items-center justify-center border-b border-white/10 px-6 py-10 text-center transition-all ${
-                    uploadedFileName
+                    isDraggingFile
+                      ? 'bg-purple-950/20 ring-2 ring-inset ring-purple-500/50'
+                      : uploadedFileName
                       ? 'bg-emerald-950/10'
                       : 'bg-[#111] hover:bg-purple-950/10'
                   }`}
                 >
                   <span
                     className={`mb-5 flex h-14 w-14 items-center justify-center rounded-2xl border transition-all ${
-                      uploadedFileName
+                      isDraggingFile
+                        ? 'border-purple-400/60 bg-purple-500/20 text-purple-200'
+                        : uploadedFileName
                         ? 'border-emerald-400/30 bg-emerald-400 text-[#07130C]'
                         : 'border-white/10 bg-white/[0.04] text-[#A1A1AA] group-hover:border-purple-500/40 group-hover:text-white'
                     }`}
                   >
-                    {uploadedFileName ? <CheckCircle2 size={26} /> : <Upload size={26} />}
+                    {isDraggingFile
+                      ? <Upload size={26} />
+                      : uploadedFileName
+                        ? <CheckCircle2 size={26} />
+                        : <Upload size={26} />}
                   </span>
                   <span className="text-lg font-semibold text-white">
-                    {uploadedFileName ? '업로드 완료' : '파일을 선택하세요'}
+                    {isDraggingFile ? '여기에 파일을 놓으세요' : uploadedFileName ? '업로드 완료' : '파일을 선택하거나 끌어놓으세요'}
                   </span>
                   <span className="mt-2 max-w-full truncate text-sm text-[#71717A]">
                     {uploadedFileName || '.xlsx, .xls, .csv'}
@@ -154,7 +214,7 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagReques
                 <input
                   id="new-tag-excel"
                   type="file"
-                  accept=".xlsx,.xls,.csv"
+                  accept={TAG_REQUEST_FILE_EXTENSIONS.join(',')}
                   className="sr-only"
                   onChange={handleExcelUpload}
                 />

@@ -103,11 +103,19 @@ export interface TagRequestMatch {
   trigger: string
 }
 
+export interface TagRequestSubstitution {
+  field: string
+  placeholder: string
+  value: string
+}
+
 export interface TagRequestValidationItem {
   request: TagRequestItem
   status: 'normal' | 'missing'
   missing_fields: string[]
   bounding_box?: BoundingBox | null
+  substitutions: TagRequestSubstitution[]
+  match_source: 'rule' | 'ai' | string
   matched_tag?: TagRequestMatch | null
 }
 

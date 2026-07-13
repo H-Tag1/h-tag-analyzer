@@ -23,11 +23,19 @@ class TagRequestMatch(BaseModel):
     trigger: str = "page_load"
 
 
+class TagRequestSubstitution(BaseModel):
+    field: str
+    placeholder: str
+    value: str
+
+
 class TagRequestValidationItem(BaseModel):
     request: TagRequestItem
     status: str
     missing_fields: List[str] = Field(default_factory=list)
     bounding_box: Optional[BoundingBox] = None
+    substitutions: List[TagRequestSubstitution] = Field(default_factory=list)
+    match_source: str = "rule"
     matched_tag: Optional[TagRequestMatch] = None
 
 
