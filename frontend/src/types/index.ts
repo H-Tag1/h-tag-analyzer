@@ -85,6 +85,55 @@ export interface GeneratedCodeSnapshot {
   generated_at: string
 }
 
+export interface TagRequestItem {
+  sheet_name: string
+  row_number: number
+  request_no: string
+  event_name: string
+  ep_button_area: string
+  ep_button_area2: string
+  ep_button_name: string
+}
+
+export interface TagRequestMatch {
+  event_name: string
+  ep_button_area: string
+  ep_button_area2: string
+  ep_button_name: string
+  trigger: string
+}
+
+export interface TagRequestValidationItem {
+  request: TagRequestItem
+  status: 'normal' | 'missing'
+  missing_fields: string[]
+  bounding_box?: BoundingBox | null
+  matched_tag?: TagRequestMatch | null
+}
+
+export interface TagRequestSheetResult {
+  sheet_name: string
+  url?: string | null
+  event_name?: string | null
+  screenshot_id?: string | null
+  screenshot_width: number
+  screenshot_height: number
+  element_count: number
+  total_count: number
+  normal_count: number
+  missing_count: number
+  error?: string | null
+  items: TagRequestValidationItem[]
+}
+
+export interface TagRequestValidationResponse {
+  file_name: string
+  total_count: number
+  normal_count: number
+  missing_count: number
+  sheets: TagRequestSheetResult[]
+}
+
 export interface ScanHistorySummary {
   id: string
   url: string

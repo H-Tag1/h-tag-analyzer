@@ -4,16 +4,18 @@ import MainPage, { type MainSection } from './pages/MainPage'
 import ScanningPage from './pages/ScanningPage'
 import AnalysisPage from './pages/AnalysisPage'
 import HistoryDetailPage from './pages/HistoryDetailPage'
+import TagRequestResultPage from './pages/TagRequestResultPage'
 import { useScan } from './hooks/useScan'
-import type { ScanStartOptions } from './types'
+import type { ScanStartOptions, TagRequestValidationResponse } from './types'
 
-type Screen = 'main' | 'scanning' | 'results' | 'history-detail'
+type Screen = 'main' | 'scanning' | 'results' | 'history-detail' | 'tag-request-results'
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('main')
   const [targetUrl, setTargetUrl] = useState('')
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null)
   const [mainSection, setMainSection] = useState<MainSection>('scan')
+  const [tagRequestResult, setTagRequestResult] = useState<TagRequestValidationResponse | null>(null)
   const { step, error, pages, historyId, batchProgress, interactionProgress, progressPercent, start, reset } = useScan()
 
   const handleStart = (options: ScanStartOptions) => {
@@ -39,11 +41,23 @@ export default function App() {
     setScreen('main')
   }
 
+  const handleTagRequestValidated = (result: TagRequestValidationResponse) => {
+    setTagRequestResult(result)
+    setScreen('tag-request-results')
+  }
+
+  const handleTagRequestBack = () => {
+    setTagRequestResult(null)
+    setMainSection('new')
+    setScreen('main')
+  }
+
   if (screen === 'main') {
     return (
       <MainPage
         onScanStart={handleStart}
         onOpenHistoryDetail={handleOpenHistoryDetail}
+        onTagRequestValidated={handleTagRequestValidated}
         initialSection={mainSection}
       />
     )
@@ -51,6 +65,10 @@ export default function App() {
 
   if (screen === 'history-detail' && selectedHistoryId) {
     return <HistoryDetailPage historyId={selectedHistoryId} onBack={handleHistoryDetailBack} />
+  }
+
+  if (screen === 'tag-request-results' && tagRequestResult) {
+    return <TagRequestResultPage result={tagRequestResult} onBack={handleTagRequestBack} />
   }
 
   if ((screen === 'scanning' || screen === 'results') && step === 'done' && pages.length > 0) {

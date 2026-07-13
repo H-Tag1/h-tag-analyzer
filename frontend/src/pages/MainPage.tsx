@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, ClipboardList, FileSpreadsheet, SearchCheck, Upload, WandSparkles } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ClipboardList, FileSpreadsheet, Loader2, SearchCheck, Upload, WandSparkles } from 'lucide-react'
 import InputPage from './InputPage'
 import ReportTable from '../components/ReportTable'
-import type { ScanStartOptions } from '../types'
+import type { ScanStartOptions, TagRequestValidationResponse } from '../types'
 
 export type MainSection = 'scan' | 'new' | 'report'
 
 interface Props {
   onScanStart: (options: ScanStartOptions) => void
   onOpenHistoryDetail: (id: string) => void
+  onTagRequestValidated: (result: TagRequestValidationResponse) => void
   initialSection?: MainSection
 }
 
@@ -18,9 +19,12 @@ const NAV_ITEMS: { key: MainSection; label: string; icon: typeof SearchCheck }[]
   { key: 'report', label: '실행 리포트', icon: ClipboardList },
 ]
 
-export default function MainPage({ onScanStart, onOpenHistoryDetail, initialSection = 'scan' }: Props) {
+export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagRequestValidated, initialSection = 'scan' }: Props) {
   const [activeSection, setActiveSection] = useState<MainSection>(initialSection)
   const [uploadedFileName, setUploadedFileName] = useState('')
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null)
+  const [isValidatingTagRequest, setIsValidatingTagRequest] = useState(false)
+  const [tagRequestError, setTagRequestError] = useState<string | null>(null)
 
   useEffect(() => {
     setActiveSection(initialSection)
@@ -28,7 +32,37 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, initialSect
 
   const handleExcelUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
+    setUploadedFile(file ?? null)
     setUploadedFileName(file?.name ?? '')
+    setTagRequestError(null)
+  }
+
+  const handleValidateTagRequest = async () => {
+    if (!uploadedFile) return
+
+    setIsValidatingTagRequest(true)
+    setTagRequestError(null)
+
+    try {
+      const formData = new FormData()
+      formData.append('file', uploadedFile)
+
+      const response = await fetch('/api/tag-requests/validate', {
+        method: 'POST',
+        body: formData,
+      })
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok) {
+        throw new Error(data?.detail ?? '요청서 검증에 실패했습니다.')
+      }
+
+      onTagRequestValidated(data as TagRequestValidationResponse)
+    } catch (error) {
+      setTagRequestError(error instanceof Error ? error.message : '요청서 검증에 실패했습니다.')
+    } finally {
+      setIsValidatingTagRequest(false)
+    }
   }
 
   return (
@@ -87,7 +121,7 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, initialSect
                 <p className="text-sm text-purple-400 mb-2">신규추가</p>
                 <h2 className="text-3xl font-bold text-white mb-3">엑셀 파일 업로드</h2>
                 <p className="text-[#A1A1AA] leading-relaxed">
-                  엑셀 기획서 기반 태그 생성을 준비합니다.
+                  엑셀 요청서 기준으로 실제 GA 태그 정상·누락 여부를 확인합니다.
                 </p>
               </div>
 
@@ -144,13 +178,21 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, initialSect
 
                   <button
                     type="button"
-                    disabled={!uploadedFileName}
+                    disabled={!uploadedFileName || isValidatingTagRequest}
+                    onClick={handleValidateTagRequest}
                     className="flex shrink-0 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition-all hover:from-purple-500 hover:to-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    <WandSparkles size={16} />
-                    태그 생성
+                    {isValidatingTagRequest ? <Loader2 size={16} className="animate-spin" /> : <WandSparkles size={16} />}
+                    {isValidatingTagRequest ? '검증 중' : '태그 생성'}
                   </button>
                 </div>
+
+                {tagRequestError && (
+                  <div className="flex items-start gap-2 border-t border-red-500/20 bg-red-950/20 px-5 py-3 text-sm text-red-300">
+                    <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                    <span>{tagRequestError}</span>
+                  </div>
+                )}
               </div>
             </section>
           )}
