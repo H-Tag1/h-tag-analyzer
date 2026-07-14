@@ -37,6 +37,67 @@ Array.from(document.querySelectorAll('button, a, [onclick], input[type="submit"]
     })
 """
 
+PERSISTENT_NAVIGATION_CHECK_JS = """
+function isPersistentNavigationElement(element) {
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const edgeTolerance = Math.max(viewportHeight * 0.02, 4);
+    const topLimit = Math.min(Math.max(viewportHeight * 0.2, 100), 180);
+    const maxBarHeight = Math.min(Math.max(viewportHeight * 0.22, 120), 180);
+    let node = element;
+
+    while (node && node !== document.documentElement) {
+        if (node.hasAttribute?.('data-h-tag-persistent-navigation')) return true;
+
+        const style = window.getComputedStyle(node);
+        if (style.position === 'fixed' || style.position === 'sticky') {
+            const rect = node.getBoundingClientRect();
+            const spansViewport = (
+                rect.width >= viewportWidth * 0.55 &&
+                rect.left <= viewportWidth * 0.15 &&
+                rect.right >= viewportWidth * 0.85
+            );
+            const tagName = node.tagName.toLowerCase();
+            const semanticNavigation = (
+                ['header', 'nav', 'footer'].includes(tagName) ||
+                node.getAttribute('role') === 'navigation'
+            );
+            const navigationHint = /(gnb|menu|navigation|drawer|sidebar)/i.test(
+                `${node.id || ''} ${String(node.className || '')}`
+            );
+            const interactiveCount = node.querySelectorAll(
+                'a, button, [onclick], input[type="button"], input[type="submit"]'
+            ).length;
+            const navigationPanel = (
+                style.position === 'fixed' &&
+                rect.width >= viewportWidth * 0.25 &&
+                rect.height >= viewportHeight * 0.5 &&
+                interactiveCount >= 2 &&
+                (semanticNavigation || navigationHint)
+            );
+            if (navigationPanel) return true;
+
+            const shortNavigationBar = (
+                rect.width > 0 &&
+                rect.height > 0 &&
+                rect.height <= maxBarHeight &&
+                spansViewport &&
+                (semanticNavigation || interactiveCount >= 2)
+            );
+            const anchoredTop = rect.top <= topLimit && style.top !== 'auto';
+            const anchoredBottom = (
+                style.position === 'fixed' &&
+                rect.top > viewportHeight / 2 &&
+                rect.bottom >= viewportHeight - edgeTolerance
+            );
+            if (shortNavigationBar && (anchoredTop || anchoredBottom)) return true;
+        }
+        node = node.parentElement;
+    }
+    return false;
+}
+"""
+
 DANGEROUS_CLICK_TEXTS = ("구매하기", "결제", "주문", "탈퇴", "삭제", "purchase", "checkout", "order now")
 
 
@@ -46,6 +107,7 @@ async def apply_click_tracking_detection(
     page_url: str,
     network_collector=None,
     progress: Optional[ProgressReporter] = None,
+    exclude_persistent_navigation: bool = False,
 ) -> List[PageElement]:
     candidates = [
         element
@@ -69,7 +131,11 @@ async def apply_click_tracking_detection(
             datalayer_before = await _collect_datalayer(page)
             network_hit_count_before = len(network_collector.get_hits()) if network_collector else 0
 
-            clicked = await _click_initial_element(page, element)
+            clicked = await _click_initial_element(
+                page,
+                element,
+                exclude_persistent_navigation=exclude_persistent_navigation,
+            )
             if not clicked:
                 continue
             element.click_tested = True
@@ -160,11 +226,16 @@ def _should_click_element(element: PageElement) -> bool:
     return True
 
 
-async def _click_initial_element(page: Page, element: PageElement) -> bool:
+async def _click_initial_element(
+    page: Page,
+    element: PageElement,
+    exclude_persistent_navigation: bool = False,
+) -> bool:
     try:
         click_point = await page.evaluate(
             f"""(payload) => {{
                 const els = {ELEMENT_QUERY_JS};
+                {PERSISTENT_NAVIGATION_CHECK_JS}
                 function buildSelector(el) {{
                     if (el.id) return '#' + CSS.escape(el.id);
                     if (el.className && typeof el.className === 'string') {{
@@ -191,11 +262,24 @@ async def _click_initial_element(page: Page, element: PageElement) -> bool:
                     el = els.find(matches) || null;
                 }}
                 if (!el) return null;
+                if (payload.excludePersistentNavigation && isPersistentNavigationElement(el)) return null;
                 el.scrollIntoView({{ block: 'center', inline: 'center' }});
                 const rect = el.getBoundingClientRect();
+                const x = rect.left + rect.width / 2;
+                const y = rect.top + rect.height / 2;
+                if (payload.excludePersistentNavigation) {{
+                    const hitElement = document.elementFromPoint(x, y);
+                    if (
+                        !hitElement ||
+                        isPersistentNavigationElement(hitElement) ||
+                        (hitElement !== el && !el.contains(hitElement))
+                    ) {{
+                        return null;
+                    }}
+                }}
                 return {{
-                    x: rect.left + rect.width / 2,
-                    y: rect.top + rect.height / 2,
+                    x,
+                    y,
                 }};
             }}""",
             {
@@ -203,6 +287,7 @@ async def _click_initial_element(page: Page, element: PageElement) -> bool:
                 "selector": element.selector,
                 "text": element.text or "",
                 "elementType": element.element_type,
+                "excludePersistentNavigation": exclude_persistent_navigation,
             },
         )
         if not click_point:

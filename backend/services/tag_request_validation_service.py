@@ -7,9 +7,11 @@ from typing import Dict, List, Optional
 
 from openai import AzureOpenAI
 
+from models.bounding_box import BoundingBox
 from models.network_tag_hit import NetworkTagHit
 from models.page_element import PageElement
 from models.scan_request import ScanRange
+from models.screenshot_segment import ScreenshotSegment
 from models.tag_request_validation import (
     TagRequestItem,
     TagRequestMatch,
@@ -19,7 +21,7 @@ from models.tag_request_validation import (
     TagRequestValidationResponse,
 )
 from config import settings
-from services.page_scan_service import collect_page_data
+from services.page_scan_service import collect_page_data_with_clean_capture
 from services.tag_request_excel_service import ParsedTagRequestSheet, parse_tag_request_workbook
 from services.tracking.event_normalizer import EP_FIELDS, event_name_from_dict, extract_ep_params, params_from_event_dict
 from services.tracking_filter_service import filter_network_tags, normalize_tracking_id
@@ -55,7 +57,14 @@ async def _validate_sheet(sheet: ParsedTagRequestSheet, tracking_id: str) -> Tag
         return _sheet_error(sheet, "태깅 요청 항목을 찾지 못했습니다.")
 
     try:
-        screenshot_id, width, height, elements, _, network_tags = await collect_page_data(
+        (
+            screenshot_segments,
+            width,
+            height,
+            tracking_elements,
+            capture_elements,
+            network_tags,
+        ) = await collect_page_data_with_clean_capture(
             sheet.url,
             scan_range=ScanRange(preset="full"),
         )
@@ -64,10 +73,16 @@ async def _validate_sheet(sheet: ParsedTagRequestSheet, tracking_id: str) -> Tag
         return _sheet_error(sheet, f"페이지 검사 중 오류가 발생했습니다: {exc}")
 
     items = [
-        _validate_request_item(item, network_tags, elements)
+        _validate_request_item(item, network_tags, tracking_elements, capture_elements)
         for item in sheet.items
     ]
-    await _apply_ai_bounding_box_fallback(items, elements, screenshot_id, width, height)
+    await _apply_ai_bounding_box_fallback(
+        items,
+        capture_elements,
+        screenshot_segments,
+        width,
+        height,
+    )
     normal_count = sum(1 for item in items if item.status == "normal")
     missing_count = len(items) - normal_count
 
@@ -75,10 +90,11 @@ async def _validate_sheet(sheet: ParsedTagRequestSheet, tracking_id: str) -> Tag
         sheet_name=sheet.sheet_name,
         url=sheet.url,
         event_name=sheet.event_name,
-        screenshot_id=screenshot_id,
+        screenshot_id=screenshot_segments[0].screenshot_id if screenshot_segments else None,
         screenshot_width=width,
         screenshot_height=height,
-        element_count=len(elements),
+        screenshot_segments=screenshot_segments,
+        element_count=len(capture_elements),
         total_count=len(items),
         normal_count=normal_count,
         missing_count=missing_count,
@@ -110,7 +126,8 @@ def _sheet_error(sheet: ParsedTagRequestSheet, message: str) -> TagRequestSheetR
 def _validate_request_item(
     request: TagRequestItem,
     network_tags: List[NetworkTagHit],
-    elements: List[PageElement],
+    tracking_elements: List[PageElement],
+    capture_elements: List[PageElement],
 ) -> TagRequestValidationItem:
     best_mismatch: Optional[Dict[str, str]] = None
     best_actual_params: Optional[Dict[str, str]] = None
@@ -124,11 +141,15 @@ def _validate_request_item(
         actual_params = extract_ep_params(hit)
         missing_fields = _missing_fields(request, actual_params)
         if not missing_fields:
-            element = _find_element_for_request(request, elements)
+            bounding_box = _find_capture_bounding_box(
+                request,
+                tracking_elements,
+                capture_elements,
+            )
             return TagRequestValidationItem(
                 request=request,
                 status="normal",
-                bounding_box=element.bounding_box if element else None,
+                bounding_box=bounding_box,
                 substitutions=_extract_substitutions(request, actual_params),
                 matched_tag=TagRequestMatch(
                     event_name=event_name,
@@ -145,12 +166,16 @@ def _validate_request_item(
             best_trigger = hit.trigger
 
     missing_fields = list(best_mismatch.keys()) if best_mismatch else ["event_name", *EP_FIELDS]
-    element = _find_element_for_request(request, elements)
+    bounding_box = _find_capture_bounding_box(
+        request,
+        tracking_elements,
+        capture_elements,
+    )
     return TagRequestValidationItem(
         request=request,
         status="missing",
         missing_fields=missing_fields,
-        bounding_box=element.bounding_box if element else None,
+        bounding_box=bounding_box,
         substitutions=_extract_substitutions(request, best_actual_params or {}),
         matched_tag=TagRequestMatch(
             event_name=request.event_name,
@@ -177,6 +202,65 @@ def _find_element_for_request(
             if not _missing_fields(request, actual_params):
                 return element
     return None
+
+
+def _find_capture_bounding_box(
+    request: TagRequestItem,
+    tracking_elements: List[PageElement],
+    capture_elements: List[PageElement],
+) -> Optional[BoundingBox]:
+    tracking_element = _find_element_for_request(request, tracking_elements)
+    if not tracking_element:
+        return None
+
+    capture_element = _find_corresponding_capture_element(tracking_element, capture_elements)
+    return capture_element.bounding_box if capture_element else None
+
+
+def _find_corresponding_capture_element(
+    tracking_element: PageElement,
+    capture_elements: List[PageElement],
+) -> Optional[PageElement]:
+    tracking_text = _normalize_element_text(tracking_element.text)
+    for element in capture_elements:
+        if (
+            element.element_index == tracking_element.element_index
+            and element.selector == tracking_element.selector
+            and element.element_type == tracking_element.element_type
+            and _normalize_element_text(element.text) == tracking_text
+        ):
+            return element
+
+    exact_matches = [
+        element
+        for element in capture_elements
+        if (
+            element.selector == tracking_element.selector
+            and element.element_type == tracking_element.element_type
+            and _normalize_element_text(element.text) == tracking_text
+        )
+    ]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if exact_matches and tracking_element.bounding_box:
+        return min(
+            exact_matches,
+            key=lambda element: _bounding_box_distance(
+                tracking_element.bounding_box,
+                element.bounding_box,
+            ),
+        )
+    return None
+
+
+def _bounding_box_distance(source: BoundingBox, target: Optional[BoundingBox]) -> float:
+    if not target:
+        return float("inf")
+    return abs(source.x - target.x) + abs(source.y - target.y)
+
+
+def _normalize_element_text(value: Optional[str]) -> str:
+    return " ".join((value or "").split())
 
 
 def _missing_fields(request: TagRequestItem, actual_params: Dict[str, str]) -> List[str]:
@@ -253,7 +337,7 @@ def _extract_field_substitutions(field: str, expected: str, actual: str) -> List
 async def _apply_ai_bounding_box_fallback(
     items: List[TagRequestValidationItem],
     elements: List[PageElement],
-    screenshot_id: str,
+    screenshot_segments: List[ScreenshotSegment],
     width: int,
     height: int,
 ) -> None:
@@ -261,27 +345,39 @@ async def _apply_ai_bounding_box_fallback(
     if not pending or not settings.azure_openai_key or not settings.azure_openai_endpoint:
         return
 
-    screenshot_path = os.path.join(settings.screenshot_dir, f"{screenshot_id}.png")
-    if not os.path.exists(screenshot_path):
+    if not screenshot_segments:
+        return
+    if any(
+        not os.path.exists(os.path.join(settings.screenshot_dir, f"{segment.screenshot_id}.png"))
+        for segment in screenshot_segments
+    ):
         return
 
     try:
-        ai_matches = _ask_ai_for_request_matches(pending, elements, screenshot_path, width, height)
+        ai_matches = _ask_ai_for_request_matches(
+            pending,
+            elements,
+            screenshot_segments,
+            width,
+            height,
+        )
     except Exception as exc:
         logger.warning("AI tag request matching skipped: %s", exc)
         return
 
-    element_lookup = {
-        f"{element.selector}|{element.text or ''}": element
-        for element in elements
-        if element.bounding_box
-    }
+    element_lookup: Dict[str, List[PageElement]] = {}
+    for element in elements:
+        if not element.bounding_box:
+            continue
+        key = f"{element.selector}|{element.text or ''}"
+        element_lookup.setdefault(key, []).append(element)
+
     for item in pending:
         match = ai_matches.get(item.request.request_no)
         if not match:
             continue
 
-        element = element_lookup.get(f"{match.get('selector', '')}|{match.get('text', '')}")
+        element = _find_ai_matched_element(match, element_lookup, screenshot_segments)
         if element and element.bounding_box:
             item.bounding_box = element.bounding_box
             item.match_source = "ai"
@@ -290,11 +386,14 @@ async def _apply_ai_bounding_box_fallback(
         raw_box = match.get("bounding_box")
         if isinstance(raw_box, dict):
             try:
-                from models.bounding_box import BoundingBox
+                segment_index = _match_segment_index(match, screenshot_segments)
+                if segment_index is None:
+                    continue
+                segment = screenshot_segments[segment_index]
 
                 item.bounding_box = BoundingBox(
                     x=float(raw_box.get("x", 0)),
-                    y=float(raw_box.get("y", 0)),
+                    y=float(raw_box.get("y", 0)) + segment.offset_y,
                     width=float(raw_box.get("width", 0)),
                     height=float(raw_box.get("height", 0)),
                 )
@@ -306,7 +405,7 @@ async def _apply_ai_bounding_box_fallback(
 def _ask_ai_for_request_matches(
     items: List[TagRequestValidationItem],
     elements: List[PageElement],
-    screenshot_path: str,
+    screenshot_segments: List[ScreenshotSegment],
     width: int,
     height: int,
 ) -> Dict[str, Dict[str, object]]:
@@ -315,9 +414,6 @@ def _ask_ai_for_request_matches(
         api_version=settings.azure_openai_api_version,
         azure_endpoint=settings.azure_openai_endpoint,
     )
-    with open(screenshot_path, "rb") as file:
-        image_b64 = base64.b64encode(file.read()).decode()
-
     requests_json = json.dumps([
         {
             "request_no": item.request.request_no,
@@ -333,16 +429,20 @@ def _ask_ai_for_request_matches(
             "selector": element.selector,
             "text": element.text or "",
             "bounding_box": element.bounding_box.model_dump() if element.bounding_box else None,
+            "segment_index": _segment_index_for_box(element.bounding_box, screenshot_segments),
         }
         for element in elements
         if element.bounding_box
     ][:250], ensure_ascii=False)
 
     prompt = f"""
-You are helping match GA4 tagging request rows to visible elements on a Korean duty-free mobile page.
-Use the screenshot and interactive element list. Prefer returning an element from the provided list.
+You are helping match GA4 tagging request rows to visible elements on a duty-free page.
+The full page is split into {len(screenshot_segments)} screenshot segments.
+Each segment label provides its zero-based index and global page Y offset.
+Use all screenshot segments and the interactive element list. Prefer returning an element from the provided list.
+Persistent headers and bottom navigation are context only. Never match requests to those controls.
 
-Screenshot size: {width}x{height}
+Full page size: {width}x{height}
 
 Requests:
 {requests_json}
@@ -355,6 +455,7 @@ Return JSON only:
   "matches": [
     {{
       "request_no": "1",
+      "segment_index": 0,
       "selector": "selector from provided element list if possible",
       "text": "text from provided element list if possible",
       "bounding_box": {{"x": 0, "y": 0, "width": 0, "height": 0}},
@@ -362,19 +463,34 @@ Return JSON only:
     }}
   ]
 }}
+bounding_box coordinates must be relative to the selected screenshot segment, not the full page.
 If no reasonable visual match exists for a request, omit it.
 """
+    image_content = []
+    for index, segment in enumerate(screenshot_segments):
+        screenshot_path = os.path.join(settings.screenshot_dir, f"{segment.screenshot_id}.png")
+        with open(screenshot_path, "rb") as file:
+            image_b64 = base64.b64encode(file.read()).decode()
+        image_content.extend([
+            {
+                "type": "text",
+                "text": (
+                    f"Screenshot segment {index}: global y offset {segment.offset_y}, "
+                    f"size {segment.width}x{segment.height}"
+                ),
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{image_b64}", "detail": "high"},
+            },
+        ])
+    image_content.append({"type": "text", "text": prompt})
+
     response = client.chat.completions.create(
         model=settings.azure_openai_deployment,
         messages=[{
             "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{image_b64}", "detail": "high"},
-                },
-                {"type": "text", "text": prompt},
-            ],
+            "content": image_content,
         }],
         response_format={"type": "json_object"},
         max_tokens=4096,
@@ -385,3 +501,52 @@ If no reasonable visual match exists for a request, omit it.
         for match in parsed.get("matches", [])
         if isinstance(match, dict) and match.get("request_no")
     }
+
+
+def _segment_index_for_box(
+    box: Optional[BoundingBox],
+    screenshot_segments: List[ScreenshotSegment],
+) -> Optional[int]:
+    if not box:
+        return None
+
+    center_y = box.y + (box.height / 2)
+    for index, segment in enumerate(screenshot_segments):
+        if segment.offset_y <= center_y < segment.offset_y + segment.height:
+            return index
+    return None
+
+
+def _find_ai_matched_element(
+    match: Dict[str, object],
+    element_lookup: Dict[str, List[PageElement]],
+    screenshot_segments: List[ScreenshotSegment],
+) -> Optional[PageElement]:
+    key = f"{match.get('selector', '')}|{match.get('text', '')}"
+    candidates = element_lookup.get(key, [])
+    if len(candidates) == 1:
+        return candidates[0]
+
+    segment_index = _match_segment_index(match, screenshot_segments)
+    if segment_index is None:
+        return None
+    segment_candidates = [
+        element
+        for element in candidates
+        if _segment_index_for_box(element.bounding_box, screenshot_segments) == segment_index
+    ]
+    return segment_candidates[0] if len(segment_candidates) == 1 else None
+
+
+def _match_segment_index(
+    match: Dict[str, object],
+    screenshot_segments: List[ScreenshotSegment],
+) -> Optional[int]:
+    raw_index = match.get("segment_index")
+    if raw_index is None and len(screenshot_segments) == 1:
+        return 0
+    try:
+        index = int(raw_index)
+    except (TypeError, ValueError):
+        return None
+    return index if 0 <= index < len(screenshot_segments) else None

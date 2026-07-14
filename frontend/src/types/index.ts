@@ -119,6 +119,13 @@ export interface TagRequestValidationItem {
   matched_tag?: TagRequestMatch | null
 }
 
+export interface ScreenshotSegment {
+  screenshot_id: string
+  offset_y: number
+  width: number
+  height: number
+}
+
 export interface TagRequestSheetResult {
   sheet_name: string
   url?: string | null
@@ -126,6 +133,7 @@ export interface TagRequestSheetResult {
   screenshot_id?: string | null
   screenshot_width: number
   screenshot_height: number
+  screenshot_segments?: ScreenshotSegment[]
   element_count: number
   total_count: number
   normal_count: number

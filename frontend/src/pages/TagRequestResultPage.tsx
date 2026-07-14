@@ -54,6 +54,19 @@ function filteredItems(sheet: TagRequestSheetResult, tab: PanelTab) {
   return sheet.items
 }
 
+function screenshotSegments(sheet: TagRequestSheetResult) {
+  if (sheet.screenshot_segments?.length) {
+    return [...sheet.screenshot_segments].sort((a, b) => a.offset_y - b.offset_y)
+  }
+  if (!sheet.screenshot_id) return []
+  return [{
+    screenshot_id: sheet.screenshot_id,
+    offset_y: 0,
+    width: sheet.screenshot_width,
+    height: sheet.screenshot_height,
+  }]
+}
+
 function MissingFields({ fields }: { fields: string[] }) {
   if (!fields.length) return null
   return (
@@ -126,6 +139,7 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
 
   const current = result.sheets[sheetIdx] ?? null
   const visibleItems = current ? filteredItems(current, panelTab) : []
+  const captureSegments = current ? screenshotSegments(current) : []
 
   if (!current) {
     return (
@@ -245,17 +259,24 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
                     <p className="text-sm">{current.error}</p>
                   </div>
                 </div>
-              ) : current.screenshot_id ? (
+              ) : captureSegments.length > 0 ? (
                 <div
                   className={`relative w-full ${isMobileScreenshot ? 'mx-auto' : ''}`}
                   style={maxDisplayWidth ? { maxWidth: maxDisplayWidth } : undefined}
                 >
-                  <img
-                    src={`/api/screenshots/${current.screenshot_id}`}
-                    alt="Page screenshot"
-                    className="w-full h-auto block rounded-lg ring-1 ring-white/5"
-                    draggable={false}
-                  />
+                  <div className="overflow-hidden rounded-lg ring-1 ring-white/5">
+                    {captureSegments.map((segment, index) => (
+                      <img
+                        key={segment.screenshot_id}
+                        src={`/api/screenshots/${segment.screenshot_id}`}
+                        alt={captureSegments.length > 1 ? `Page screenshot ${index + 1}` : 'Page screenshot'}
+                        width={segment.width}
+                        height={segment.height}
+                        className="block h-auto w-full"
+                        draggable={false}
+                      />
+                    ))}
+                  </div>
                   <div className="absolute inset-0 pointer-events-none">
                     {current.items.map(item => {
                       if (!hasVisibleBox(item.bounding_box)) return null

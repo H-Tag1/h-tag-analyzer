@@ -3,6 +3,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 from .bounding_box import BoundingBox
+from .screenshot_segment import ScreenshotSegment
 
 
 class TagRequestItem(BaseModel):
@@ -46,6 +47,7 @@ class TagRequestSheetResult(BaseModel):
     screenshot_id: Optional[str] = None
     screenshot_width: int = 0
     screenshot_height: int = 0
+    screenshot_segments: List[ScreenshotSegment] = Field(default_factory=list)
     element_count: int = 0
     total_count: int = 0
     normal_count: int = 0
