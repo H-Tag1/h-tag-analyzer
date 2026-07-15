@@ -92,6 +92,7 @@ async def collect_page_data(
 async def collect_page_data_with_clean_capture(
     url: str,
     scan_range: Optional[ScanRange] = None,
+    progress: Optional[ProgressReporter] = None,
 ) -> Tuple[List[ScreenshotSegment], int, int, List[PageElement], List[PageElement], List[NetworkTagHit]]:
     """
     Returns: (screenshot_segments, width, height, tracking_elements, capture_elements, network_tags)
@@ -110,6 +111,7 @@ async def collect_page_data_with_clean_capture(
             await _goto_scan_target(tracking_page, url)
             await tracking_page.wait_for_timeout(500)
             await _mark_persistent_navigation(tracking_page)
+            await _report_progress(progress, {"type": "page_loaded"})
             collector.reset()
             tracking_elements, _, network_tags = await _collect_tracking_data(
                 page=tracking_page,
@@ -118,8 +120,14 @@ async def collect_page_data_with_clean_capture(
                 exclude_auth_actions=False,
                 exclude_persistent_navigation=True,
                 scan_range=scan_range,
+                progress=progress,
             )
+            await _report_progress(progress, {
+                "type": "tracking_collected",
+                "elementCount": len(tracking_elements),
+            })
 
+            await _report_progress(progress, {"type": "capture_start"})
             capture_page = await _new_scan_page(browser, url)
             await _goto_scan_target(capture_page, url)
             await capture_page.wait_for_timeout(500)
@@ -142,6 +150,10 @@ async def collect_page_data_with_clean_capture(
                 screenshot_offset_y,
                 height,
             )
+            await _report_progress(progress, {
+                "type": "capture_done",
+                "segmentCount": len(screenshot_segments),
+            })
 
             return (
                 screenshot_segments,

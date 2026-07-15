@@ -1,9 +1,10 @@
+import asyncio
 import base64
 import json
 import logging
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from openai import AzureOpenAI
 
@@ -27,30 +28,81 @@ from services.tracking.event_normalizer import EP_FIELDS, event_name_from_dict, 
 from services.tracking_filter_service import filter_network_tags, normalize_tracking_id
 
 logger = logging.getLogger(__name__)
+ProgressReporter = Callable[[Dict[str, Any]], Awaitable[None]]
 
 
 async def validate_tag_request_workbook(
     file_name: str,
     content: bytes,
     tracking_id: str = "G-1NWKV3S1TW",
+    progress: Optional[ProgressReporter] = None,
 ) -> TagRequestValidationResponse:
     sheets = parse_tag_request_workbook(file_name, content)
     target_tracking_id = normalize_tracking_id(tracking_id)
     results: List[TagRequestSheetResult] = []
+    total_sheets = len(sheets)
 
-    for sheet in sheets:
-        results.append(await _validate_sheet(sheet, target_tracking_id))
+    await _report_progress(progress, {
+        "type": "validation_start",
+        "sheetTotal": total_sheets,
+    })
 
-    return TagRequestValidationResponse(
+    for index, sheet in enumerate(sheets, start=1):
+        context = {
+            "sheetIndex": index,
+            "sheetTotal": total_sheets,
+            "sheetName": sheet.sheet_name,
+            "url": sheet.url or "",
+        }
+
+        async def report_sheet_progress(
+            event: Dict[str, Any],
+            sheet_context: Dict[str, Any] = context,
+        ) -> None:
+            await _report_progress(progress, {**event, **sheet_context})
+
+        await _report_progress(progress, {
+            "type": "sheet_start",
+            **context,
+            "itemTotal": len(sheet.items),
+        })
+        result = await _validate_sheet(sheet, target_tracking_id, report_sheet_progress)
+        results.append(result)
+        await _report_progress(progress, {
+            "type": "sheet_complete",
+            **context,
+            "normalCount": result.normal_count,
+            "missingCount": result.missing_count,
+            "hasError": bool(result.error),
+        })
+
+    response = TagRequestValidationResponse(
         file_name=file_name,
         total_count=sum(result.total_count for result in results),
         normal_count=sum(result.normal_count for result in results),
         missing_count=sum(result.missing_count for result in results),
         sheets=results,
     )
+    await _report_progress(progress, {
+        "type": "validation_complete",
+        "data": response.model_dump(mode="json"),
+    })
+    return response
 
 
-async def _validate_sheet(sheet: ParsedTagRequestSheet, tracking_id: str) -> TagRequestSheetResult:
+async def _report_progress(
+    progress: Optional[ProgressReporter],
+    event: Dict[str, Any],
+) -> None:
+    if progress:
+        await progress(event)
+
+
+async def _validate_sheet(
+    sheet: ParsedTagRequestSheet,
+    tracking_id: str,
+    progress: Optional[ProgressReporter] = None,
+) -> TagRequestSheetResult:
     if not sheet.url:
         return _sheet_error(sheet, "URL을 찾지 못했습니다.")
     if not sheet.items:
@@ -67,11 +119,16 @@ async def _validate_sheet(sheet: ParsedTagRequestSheet, tracking_id: str) -> Tag
         ) = await collect_page_data_with_clean_capture(
             sheet.url,
             scan_range=ScanRange(preset="full"),
+            progress=progress,
         )
         network_tags = filter_network_tags(network_tags, tracking_id)
     except Exception as exc:
         return _sheet_error(sheet, f"페이지 검사 중 오류가 발생했습니다: {exc}")
 
+    await _report_progress(progress, {
+        "type": "matching_start",
+        "itemTotal": len(sheet.items),
+    })
     items = [
         _validate_request_item(item, network_tags, tracking_elements, capture_elements)
         for item in sheet.items
@@ -82,7 +139,12 @@ async def _validate_sheet(sheet: ParsedTagRequestSheet, tracking_id: str) -> Tag
         screenshot_segments,
         width,
         height,
+        progress=progress,
     )
+    await _report_progress(progress, {
+        "type": "matching_done",
+        "itemTotal": len(items),
+    })
     normal_count = sum(1 for item in items if item.status == "normal")
     missing_count = len(items) - normal_count
 
@@ -340,6 +402,7 @@ async def _apply_ai_bounding_box_fallback(
     screenshot_segments: List[ScreenshotSegment],
     width: int,
     height: int,
+    progress: Optional[ProgressReporter] = None,
 ) -> None:
     pending = [item for item in items if item.bounding_box is None]
     if not pending or not settings.azure_openai_key or not settings.azure_openai_endpoint:
@@ -353,8 +416,13 @@ async def _apply_ai_bounding_box_fallback(
     ):
         return
 
+    await _report_progress(progress, {
+        "type": "ai_matching_start",
+        "itemTotal": len(pending),
+    })
     try:
-        ai_matches = _ask_ai_for_request_matches(
+        ai_matches = await asyncio.to_thread(
+            _ask_ai_for_request_matches,
             pending,
             elements,
             screenshot_segments,
@@ -363,7 +431,15 @@ async def _apply_ai_bounding_box_fallback(
         )
     except Exception as exc:
         logger.warning("AI tag request matching skipped: %s", exc)
+        await _report_progress(progress, {
+            "type": "ai_matching_done",
+            "matchedCount": 0,
+        })
         return
+    await _report_progress(progress, {
+        "type": "ai_matching_done",
+        "matchedCount": len(ai_matches),
+    })
 
     element_lookup: Dict[str, List[PageElement]] = {}
     for element in elements:

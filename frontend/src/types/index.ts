@@ -150,6 +150,36 @@ export interface TagRequestValidationResponse {
   sheets: TagRequestSheetResult[]
 }
 
+export interface TagRequestProgressContext {
+  sheetIndex: number
+  sheetTotal: number
+  sheetName: string
+  url: string
+}
+
+export type TagRequestValidationEvent =
+  | { type: 'validation_start'; sheetTotal: number }
+  | ({ type: 'sheet_start'; itemTotal: number } & TagRequestProgressContext)
+  | ({ type: 'page_loaded' } & TagRequestProgressContext)
+  | ({ type: 'elements_collected'; count: number } & TagRequestProgressContext)
+  | ({ type: 'click_scan_start'; current: number; total: number } & TagRequestProgressContext)
+  | ({ type: 'click_scan_progress'; current: number; total: number } & TagRequestProgressContext)
+  | ({ type: 'tracking_collected'; elementCount: number } & TagRequestProgressContext)
+  | ({ type: 'capture_start' } & TagRequestProgressContext)
+  | ({ type: 'capture_done'; segmentCount: number } & TagRequestProgressContext)
+  | ({ type: 'matching_start'; itemTotal: number } & TagRequestProgressContext)
+  | ({ type: 'ai_matching_start'; itemTotal: number } & TagRequestProgressContext)
+  | ({ type: 'ai_matching_done'; matchedCount: number } & TagRequestProgressContext)
+  | ({ type: 'matching_done'; itemTotal: number } & TagRequestProgressContext)
+  | ({
+      type: 'sheet_complete'
+      normalCount: number
+      missingCount: number
+      hasError: boolean
+    } & TagRequestProgressContext)
+  | { type: 'validation_complete'; data: TagRequestValidationResponse }
+  | { type: 'error'; message: string }
+
 export interface ScanHistorySummary {
   id: string
   url: string

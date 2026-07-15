@@ -3,6 +3,7 @@ import { AlertCircle, CheckCircle2, ClipboardList, FileSpreadsheet, Loader2, Sea
 import InputPage from './InputPage'
 import ReportTable from '../components/ReportTable'
 import type { ScanStartOptions, TagRequestValidationResponse } from '../types'
+import { useTagRequestValidation } from '../hooks/useTagRequestValidation'
 
 export type MainSection = 'scan' | 'new' | 'report'
 
@@ -31,23 +32,33 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagReques
   const [uploadedFileName, setUploadedFileName] = useState('')
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [isDraggingFile, setIsDraggingFile] = useState(false)
-  const [isValidatingTagRequest, setIsValidatingTagRequest] = useState(false)
-  const [tagRequestError, setTagRequestError] = useState<string | null>(null)
+  const [tagRequestInputError, setTagRequestInputError] = useState<string | null>(null)
   const dragDepthRef = useRef(0)
+  const {
+    isValidating: isValidatingTagRequest,
+    error: tagRequestValidationError,
+    progress: tagRequestProgress,
+    start: startTagRequestValidation,
+    reset: resetTagRequestValidation,
+  } = useTagRequestValidation()
+  const tagRequestError = tagRequestInputError ?? tagRequestValidationError
 
   useEffect(() => {
     setActiveSection(initialSection)
   }, [initialSection])
 
   const applyUploadedFile = (file: File | null) => {
+    if (isValidatingTagRequest) return
+
     if (file && !isSupportedTagRequestFile(file)) {
-      setTagRequestError('.xlsx, .xls, .csv 파일만 업로드할 수 있습니다.')
+      setTagRequestInputError('.xlsx, .xls, .csv 파일만 업로드할 수 있습니다.')
       return
     }
 
+    resetTagRequestValidation()
     setUploadedFile(file)
     setUploadedFileName(file?.name ?? '')
-    setTagRequestError(null)
+    setTagRequestInputError(null)
   }
 
   const handleExcelUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -58,6 +69,7 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagReques
   const handleDragEnter = (event: React.DragEvent<HTMLLabelElement>) => {
     event.preventDefault()
     event.stopPropagation()
+    if (isValidatingTagRequest) return
     dragDepthRef.current += 1
     setIsDraggingFile(true)
   }
@@ -65,12 +77,13 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagReques
   const handleDragOver = (event: React.DragEvent<HTMLLabelElement>) => {
     event.preventDefault()
     event.stopPropagation()
-    event.dataTransfer.dropEffect = 'copy'
+    event.dataTransfer.dropEffect = isValidatingTagRequest ? 'none' : 'copy'
   }
 
   const handleDragLeave = (event: React.DragEvent<HTMLLabelElement>) => {
     event.preventDefault()
     event.stopPropagation()
+    if (isValidatingTagRequest) return
     dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
     if (dragDepthRef.current === 0) {
       setIsDraggingFile(false)
@@ -82,35 +95,15 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagReques
     event.stopPropagation()
     dragDepthRef.current = 0
     setIsDraggingFile(false)
+    if (isValidatingTagRequest) return
     applyUploadedFile(event.dataTransfer.files?.[0] ?? null)
   }
 
-  const handleValidateTagRequest = async () => {
+  const handleValidateTagRequest = () => {
     if (!uploadedFile) return
 
-    setIsValidatingTagRequest(true)
-    setTagRequestError(null)
-
-    try {
-      const formData = new FormData()
-      formData.append('file', uploadedFile)
-
-      const response = await fetch('/api/tag-requests/validate', {
-        method: 'POST',
-        body: formData,
-      })
-      const data = await response.json().catch(() => null)
-
-      if (!response.ok) {
-        throw new Error(data?.detail ?? '요청서 검증에 실패했습니다.')
-      }
-
-      onTagRequestValidated(data as TagRequestValidationResponse)
-    } catch (error) {
-      setTagRequestError(error instanceof Error ? error.message : '요청서 검증에 실패했습니다.')
-    } finally {
-      setIsValidatingTagRequest(false)
-    }
+    setTagRequestInputError(null)
+    startTagRequestValidation(uploadedFile, onTagRequestValidated)
   }
 
   return (
@@ -180,12 +173,15 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagReques
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
                   onDrop={handleDrop}
-                  className={`group flex min-h-[220px] cursor-pointer flex-col items-center justify-center border-b border-white/10 px-6 py-10 text-center transition-all ${
-                    isDraggingFile
+                  aria-disabled={isValidatingTagRequest}
+                  className={`group flex min-h-[220px] flex-col items-center justify-center border-b border-white/10 px-6 py-10 text-center transition-all ${
+                    isValidatingTagRequest
+                      ? 'cursor-wait bg-[#111] opacity-70'
+                      : isDraggingFile
                       ? 'bg-purple-950/20 ring-2 ring-inset ring-purple-500/50'
                       : uploadedFileName
-                      ? 'bg-emerald-950/10'
-                      : 'bg-[#111] hover:bg-purple-950/10'
+                        ? 'cursor-pointer bg-emerald-950/10'
+                        : 'cursor-pointer bg-[#111] hover:bg-purple-950/10'
                   }`}
                 >
                   <span
@@ -217,6 +213,7 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagReques
                   accept={TAG_REQUEST_FILE_EXTENSIONS.join(',')}
                   className="sr-only"
                   onChange={handleExcelUpload}
+                  disabled={isValidatingTagRequest}
                 />
 
                 <div className="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between">
@@ -243,9 +240,63 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagReques
                     className="flex shrink-0 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition-all hover:from-purple-500 hover:to-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {isValidatingTagRequest ? <Loader2 size={16} className="animate-spin" /> : <WandSparkles size={16} />}
-                    {isValidatingTagRequest ? '검증 중' : '태그 생성'}
+                    {isValidatingTagRequest ? '태그 생성 중' : '태그 생성'}
                   </button>
                 </div>
+
+                {isValidatingTagRequest && (
+                  <div
+                    className="border-t border-white/10 bg-[#111] px-5 py-4"
+                    aria-live="polite"
+                  >
+                    <div className="mb-3 flex items-center justify-between gap-4">
+                      <div className="flex min-w-0 items-center gap-2 text-sm text-white">
+                        <Loader2 size={16} className="shrink-0 animate-spin text-purple-300" />
+                        <span className="truncate">{tagRequestProgress.stageLabel}</span>
+                      </div>
+                      <span className="shrink-0 font-mono text-sm font-semibold text-purple-300">
+                        {tagRequestProgress.percent}%
+                      </span>
+                    </div>
+
+                    <div
+                      className="h-2 overflow-hidden rounded-full bg-[#2A2A2A]"
+                      role="progressbar"
+                      aria-label="태그 생성 진행률"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={tagRequestProgress.percent}
+                    >
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-purple-600 to-blue-600 transition-all duration-500"
+                        style={{ width: `${tagRequestProgress.percent}%` }}
+                      />
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-[#71717A]">
+                      {tagRequestProgress.sheetTotal > 0 && (
+                        <span className="min-w-0 truncate">
+                          시트 {tagRequestProgress.sheetCurrent}/{tagRequestProgress.sheetTotal}
+                          {tagRequestProgress.sheetName ? ` · ${tagRequestProgress.sheetName}` : ''}
+                        </span>
+                      )}
+                      {tagRequestProgress.interactionTotal !== null && (
+                        <span className="shrink-0 font-mono">
+                          클릭 요소 {tagRequestProgress.interactionCurrent ?? 0}/{tagRequestProgress.interactionTotal}
+                        </span>
+                      )}
+                    </div>
+
+                    {tagRequestProgress.currentUrl && (
+                      <p
+                        className="mt-2 truncate text-xs text-[#52525B]"
+                        title={tagRequestProgress.currentUrl}
+                      >
+                        {tagRequestProgress.currentUrl}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {tagRequestError && (
                   <div className="flex items-start gap-2 border-t border-red-500/20 bg-red-950/20 px-5 py-3 text-sm text-red-300">
