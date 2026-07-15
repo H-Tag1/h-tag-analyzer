@@ -12,6 +12,10 @@ from services.ga_event_exclusion_service import (
 )
 from services.tracking.event_normalizer import extract_ep_params, is_interaction_event
 from services.tracking.tracking_data import merge_tracking_data
+from services.element_grouping_service import (
+    propagate_group_click_results,
+    should_click_for_verification,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -109,19 +113,30 @@ async def apply_click_tracking_detection(
     progress: Optional[ProgressReporter] = None,
     exclude_persistent_navigation: bool = False,
 ) -> List[PageElement]:
-    candidates = [
-        element
-        for element in elements
-        if _should_click_element(element)
-    ]
+    clickable_elements = [element for element in elements if _should_click_element(element)]
+    candidates = _build_representative_click_candidates(clickable_elements)
+    optimization_stats = _compute_click_reduction_stats(clickable_elements, candidates)
+
     candidates.sort(key=_click_priority)
     initial_url = page.url or page_url
     total_candidates = len(candidates)
     completed_candidates = 0
+
+    logger.info(
+        "Click optimization: total_clickable=%d actual_clicks=%d skipped_siblings=%d reduction=%.1f%%",
+        optimization_stats["total_clickable"],
+        optimization_stats["actual_clicks"],
+        optimization_stats["skipped_siblings"],
+        optimization_stats["reduction_percent"],
+    )
+
     await _report_progress(progress, {
         "type": "click_scan_start",
         "current": completed_candidates,
         "total": total_candidates,
+        "totalClickable": optimization_stats["total_clickable"],
+        "skippedGroupedSiblings": optimization_stats["skipped_siblings"],
+        "reductionPercent": optimization_stats["reduction_percent"],
     })
 
     for element in candidates:
@@ -199,7 +214,45 @@ async def apply_click_tracking_detection(
             })
 
     await _close_click_side_effects(page)
+    elements = propagate_group_click_results(elements)
+
+    await _report_progress(progress, {
+        "type": "click_scan_complete",
+        "current": completed_candidates,
+        "total": total_candidates,
+        "totalClickable": optimization_stats["total_clickable"],
+        "skippedGroupedSiblings": optimization_stats["skipped_siblings"],
+        "reductionPercent": optimization_stats["reduction_percent"],
+        "propagatedSiblings": sum(
+            1 for element in elements
+            if element.click_group_id and not element.click_group_representative
+        ),
+    })
     return elements
+
+
+def _build_representative_click_candidates(elements: List[PageElement]) -> List[PageElement]:
+    return [element for element in elements if should_click_for_verification(element)]
+
+
+def _compute_click_reduction_stats(
+    clickable_elements: List[PageElement],
+    candidates: List[PageElement],
+) -> Dict[str, Any]:
+    total_clickable = len(clickable_elements)
+    actual_clicks = len(candidates)
+    skipped_siblings = max(total_clickable - actual_clicks, 0)
+    reduction_percent = (
+        (skipped_siblings / total_clickable) * 100.0
+        if total_clickable > 0
+        else 0.0
+    )
+    return {
+        "total_clickable": total_clickable,
+        "actual_clicks": actual_clicks,
+        "skipped_siblings": skipped_siblings,
+        "reduction_percent": round(reduction_percent, 1),
+    }
 
 
 async def _report_progress(progress: Optional[ProgressReporter], event: Dict[str, Any]) -> None:

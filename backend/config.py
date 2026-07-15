@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     scan_history_dir: str = "data/scan_history/records"
     scan_history_index_file: str = "data/scan_history/index.json"
     max_scan_history: int = 50
+    ga4common_templates_dir: str = "templates/ga4common"
+    rag_persist_dir: str = "data/rag/chroma"
+    rag_collection_name: str = "ga4common_handlers"
+    azure_openai_embedding_deployment: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

@@ -11,6 +11,10 @@ def is_click_event(event_name: str) -> bool:
     return event_name.lower().startswith("click_")
 
 
+def is_page_view_event(event_name: str) -> bool:
+    return (event_name or "").strip().lower() == "page_view"
+
+
 def is_interaction_event(event_name: str, params: Dict[str, str]) -> bool:
     if is_click_event(event_name):
         return True

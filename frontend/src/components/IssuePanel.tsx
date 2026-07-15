@@ -5,7 +5,7 @@ import TagSpecEditor from './TagSpecEditor'
 import CodeViewer from './CodeViewer'
 import { issueIdentityKey } from '../utils/dismissedIssues'
 import { saveGeneratedCode } from '../utils/scanHistory'
-import { normalizeTagSpec, toGaSpec, type TagSpec } from '../utils/tagSpec'
+import { mergeTagSpec, normalizeTagSpec, toGaSpec, type TagSpec } from '../utils/tagSpec'
 import { scrollElementIntoContainerAfterLayout } from '../utils/scrollIntoContainer'
 
 interface Props {
@@ -19,8 +19,17 @@ interface Props {
   onGeneratedCodesChange?: (codes: GeneratedCodeSnapshot[]) => void
 }
 
-function getTagSpec(issue: AiAnalysisItem, edited: Record<string, TagSpec>): TagSpec {
-  return edited[issueIdentityKey(issue)] ?? normalizeTagSpec(issue.recommended_ga_spec)
+function getTagSpec(
+  issue: AiAnalysisItem,
+  edited: Record<string, TagSpec>,
+  suggested: Record<string, TagSpec>,
+): TagSpec {
+  const key = issueIdentityKey(issue)
+  if (edited[key]) return edited[key]
+
+  const base = normalizeTagSpec(issue.recommended_ga_spec)
+  const suggestion = suggested[key]
+  return suggestion ? mergeTagSpec(base, suggestion) : base
 }
 
 export default function IssuePanel({
@@ -34,6 +43,8 @@ export default function IssuePanel({
   onGeneratedCodesChange,
 }: Props) {
   const [editedTags, setEditedTags] = useState<Record<string, TagSpec>>({})
+  const [suggestedTags, setSuggestedTags] = useState<Record<string, TagSpec>>({})
+  const [isSuggesting, setIsSuggesting] = useState(false)
   const [generatedCode, setGeneratedCode] = useState<string | null>(initialGeneratedCode)
   const [isGenerating, setIsGenerating] = useState(false)
   const [dismissingKey, setDismissingKey] = useState<string | null>(null)
@@ -53,9 +64,57 @@ export default function IssuePanel({
     setGeneratedCode(initialGeneratedCode)
   }, [initialGeneratedCode, pageUrl])
 
+  useEffect(() => {
+    if (!pageUrl || issues.length === 0) {
+      setSuggestedTags({})
+      return
+    }
+
+    let cancelled = false
+    setIsSuggesting(true)
+
+    void (async () => {
+      try {
+        const res = await fetch('/api/suggest-tag-specs', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            page_url: pageUrl,
+            issues: issues.map(issue => ({
+              element_selector: issue.element_selector,
+              element_text: issue.element_text,
+              recommended_ga_spec: issue.recommended_ga_spec,
+            })),
+          }),
+        })
+        if (!res.ok || cancelled) return
+
+        const data = await res.json() as { suggestions: TagSpec[] }
+        const next: Record<string, TagSpec> = {}
+        issues.forEach((issue, idx) => {
+          const suggestion = data.suggestions[idx]
+          if (suggestion) {
+            next[issueIdentityKey(issue)] = suggestion
+          }
+        })
+        if (!cancelled) {
+          setSuggestedTags(next)
+        }
+      } finally {
+        if (!cancelled) {
+          setIsSuggesting(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [pageUrl, issues])
+
   const handleDismiss = async (issue: AiAnalysisItem) => {
     const key = issueIdentityKey(issue)
-    const tag = getTagSpec(issue, editedTags)
+    const tag = getTagSpec(issue, editedTags, suggestedTags)
     setDismissingKey(key)
     try {
       await onDismiss(issue, tag)
@@ -74,13 +133,17 @@ export default function IssuePanel({
     try {
       const results = await Promise.all(
         issues.map(async (issue, idx) => {
-          const tag = getTagSpec(issue, editedTags)
+          const tag = getTagSpec(issue, editedTags, suggestedTags)
           const spec = toGaSpec(tag, issue.element_selector)
           const res = await fetch('/api/generate-code', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ ga_spec: spec }),
+            body: JSON.stringify({ ga_spec: spec, page_url: pageUrl }),
           })
+          if (!res.ok) {
+            const errorData = await res.json().catch(() => null)
+            throw new Error(errorData?.detail ?? '코드 생성에 실패했습니다.')
+          }
           const data = await res.json()
           const label = issue.element_text || `누락 ${idx + 1}`
           return `// ${label}\n${data.code as string}`
@@ -132,8 +195,9 @@ export default function IssuePanel({
       <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto">
         {issues.map((item, idx) => {
           const isSelected = selectedIndex === idx
-          const tag = getTagSpec(item, editedTags)
           const key = issueIdentityKey(item)
+          const tag = getTagSpec(item, editedTags, suggestedTags)
+          const suggestion = suggestedTags[key]
           const isDismissing = dismissingKey === key
 
           return (
@@ -178,6 +242,12 @@ export default function IssuePanel({
 
               {isSelected && (
                 <div className="px-4 pb-4 animate-fade-in">
+                  {isSuggesting && !suggestion && (
+                    <p className="text-xs text-[#52525B] mb-2 flex items-center gap-1.5">
+                      <Loader size={12} className="animate-spin" />
+                      LLM 명명 추천 불러오는 중...
+                    </p>
+                  )}
                   <TagSpecEditor
                     value={tag}
                     onChange={val => setEditedTags(prev => ({ ...prev, [key]: val }))}

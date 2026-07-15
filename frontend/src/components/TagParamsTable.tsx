@@ -3,7 +3,7 @@ interface Props {
 }
 
 const TRACKING_FIELDS = [
-  { key: 'event_name' as const, label: '추천 태그' },
+  { key: 'event_name' as const, label: '이벤트 이름' },
   { key: 'ep_button_area' as const, label: 'ep_button_area' },
   { key: 'ep_button_area2' as const, label: 'ep_button_area2' },
   { key: 'ep_button_name' as const, label: 'ep_button_name' },

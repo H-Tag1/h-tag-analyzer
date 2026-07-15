@@ -16,6 +16,9 @@ from services.tracking_detection_service import (
     apply_static_tracking_detection,
     parse_static_signals,
 )
+from services.element_grouping_service import (
+    apply_click_grouping_with_llm,
+)
 from services.network_tag_service import NetworkTagCollector
 from services.site_adapters.hddfs import (
     goto_scan_target as _goto_scan_target,
@@ -243,7 +246,15 @@ async def _collect_tracking_data(
         exclude_persistent_navigation=exclude_persistent_navigation,
         scan_range=scan_range,
     )
-    await _report_progress(progress, {"type": "elements_collected", "count": len(elements)})
+    elements = await apply_click_grouping_with_llm(elements)
+    grouped_count = sum(1 for element in elements if element.click_group_id)
+    representative_count = sum(1 for element in elements if element.click_group_representative)
+    await _report_progress(progress, {
+        "type": "elements_collected",
+        "count": len(elements),
+        "groupedCount": grouped_count,
+        "clickCandidateCount": representative_count,
+    })
     datalayer = await _collect_datalayer(page)
     elements = apply_static_tracking_detection(elements)
     collector.set_trigger("click")
@@ -318,6 +329,32 @@ async def _collect_elements(
             return el.tagName.toLowerCase();
         }
 
+        function nodeKey(node) {
+            if (!node || node === document.documentElement) return '';
+            if (node.id) return '#' + CSS.escape(node.id);
+            if (node.className && typeof node.className === 'string') {
+                const cls = node.className.trim().split(/\\s+/).filter(Boolean).slice(0, 2).join('.');
+                if (cls) return node.tagName.toLowerCase() + '.' + cls;
+            }
+            return node.tagName.toLowerCase();
+        }
+
+        function buildStructureGroupKey(el) {
+            let node = el;
+            while (node && node.parentElement) {
+                const parent = node.parentElement;
+                const peers = Array.from(parent.children).filter((child) => (
+                    child.tagName === node.tagName &&
+                    String(child.className || '') === String(node.className || '')
+                ));
+                if (peers.length >= 2) {
+                    return `${nodeKey(parent)}>${nodeKey(node)}>${nodeKey(el)}`;
+                }
+                node = parent;
+            }
+            return '';
+        }
+
         return Array.from(document.querySelectorAll('button, a, [onclick], input[type="submit"], input[type="button"]'))
             .filter(el => {
                 const rect = el.getBoundingClientRect();
@@ -342,6 +379,7 @@ async def _collect_elements(
                     selector: buildSelector(el),
                     text: (el.innerText || el.value || el.title || el.getAttribute('aria-label') || '').trim().slice(0, 120),
                     element_type: el.tagName.toLowerCase(),
+                    structure_group_key: buildStructureGroupKey(el),
                     bounding_box: {
                         x: rect.x + scrollX,
                         y: rect.y + scrollY,
@@ -377,6 +415,7 @@ async def _collect_elements(
             element_index=item.get("element_index", 0),
             has_ga_tag=item.get("has_ga_tag", False),
             static_tracking_signals=parse_static_signals(item.get("static_tracking_signals", [])),
+            structure_group_key=item.get("structure_group_key") or None,
         ))
     return elements
 

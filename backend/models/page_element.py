@@ -16,3 +16,7 @@ class PageElement(BaseModel):
     click_tested: bool = False
     tracking_data: Dict[str, Any] = Field(default_factory=dict)
     tracking_methods: List[str] = Field(default_factory=list)
+    structure_group_key: Optional[str] = None
+    click_group_id: Optional[str] = None
+    click_group_representative: bool = True
+    click_group_size: int = 1

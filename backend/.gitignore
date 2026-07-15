@@ -7,3 +7,4 @@ venv/
 static/screenshots/*.png
 data/dismissed_issues.json
 data/scan_history/
+data/rag/

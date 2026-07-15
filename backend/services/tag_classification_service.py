@@ -15,10 +15,12 @@ from services.tracking.event_normalizer import (
     has_click_equivalent,
     is_click_event,
     is_interaction_event,
+    is_page_view_event,
     param_signature,
     params_from_event_dict,
     prefer_click_events,
 )
+from services.element_grouping_service import expand_grouped_overlay_results
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +58,8 @@ def classify_network_tags(
 
         for click_event in prefer_click_events(element.click_tracking_events):
             event_name = event_name_from_dict(click_event)
+            if is_page_view_event(event_name):
+                continue
             params = params_from_event_dict(click_event)
             if not is_interaction_event(event_name, params):
                 continue
@@ -77,6 +81,8 @@ def classify_network_tags(
 
     for hit in click_hits:
         event_name = (hit.event_name or "").strip()
+        if is_page_view_event(event_name):
+            continue
         params = extract_ep_params(hit)
         element = _find_element_for_hit(hit, elements or [])
 
@@ -111,6 +117,8 @@ def classify_network_tags(
 
         issues.append(_to_missing_event_issue_item(element))
         classified_element_keys.add(element_key)
+
+    tracked_items, issues = expand_grouped_overlay_results(tracked_items, issues, elements)
 
     logger.info(
         "Classified tags: %d network click hits, %d elements -> %d tracked, %d missing",

@@ -6,7 +6,7 @@ interface Props {
 }
 
 const FIELDS: { key: keyof TagSpec; label: string }[] = [
-  { key: 'event_name', label: '추천 태그' },
+  { key: 'event_name', label: '이벤트 이름' },
   { key: 'ep_button_area', label: 'ep_button_area' },
   { key: 'ep_button_area2', label: 'ep_button_area2' },
   { key: 'ep_button_name', label: 'ep_button_name' },
@@ -22,7 +22,7 @@ export default function TagSpecEditor({ value, onChange }: Props) {
       {FIELDS.map(({ key, label }) => (
         <div key={key} className="flex items-center gap-2">
           <label className="text-xs text-[#A1A1AA] whitespace-nowrap flex-shrink-0 w-[118px]">
-            {label})
+            {label}
           </label>
           <span className="text-[#52525B] text-xs">:</span>
           <input

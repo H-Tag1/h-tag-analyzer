@@ -22,6 +22,7 @@ from services.tracking_filter_service import (
     normalize_tracking_id,
 )
 from services.dismissed_issue_service import filter_dismissed_issues
+from services.ga4_channel_service import resolve_channel_or_none
 from services.scan_history_service import save_scan_history
 from services.tag_classification_service import classify_network_tags
 
@@ -224,6 +225,7 @@ def _assemble_page_data(
 ) -> PageScanData:
     tracked_items, issues = classify_network_tags(network_tags, elements)
     issues = filter_dismissed_issues(issues, url)
+    channel = resolve_channel_or_none(url)
 
     return PageScanData(
         url=url,
@@ -232,6 +234,8 @@ def _assemble_page_data(
         screenshot_height=height,
         element_count=len(elements),
         tracking_id=tracking_id,
+        channel_id=channel.channel_id if channel else None,
+        channel_label=channel.label if channel else None,
         datalayer_events=datalayer,
         issues=issues,
         tracked_items=tracked_items,

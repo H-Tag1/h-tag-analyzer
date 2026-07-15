@@ -43,6 +43,8 @@ export interface PageScanData {
   screenshot_height: number
   element_count: number
   tracking_id?: string
+  channel_id?: string | null
+  channel_label?: string | null
   datalayer_events: Record<string, unknown>[]
   issues: AiAnalysisItem[]
   tracked_items: TrackedAnalysisItem[]

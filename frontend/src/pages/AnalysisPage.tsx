@@ -7,6 +7,8 @@ import TrackedPanel from '../components/TrackedPanel'
 import AllTagsPanel from '../components/AllTagsPanel'
 import { dismissIssue, issueIdentityKey } from '../utils/dismissedIssues'
 import { getSavedCodeForPage } from '../utils/scanHistory'
+import { getPageChannelLabel } from '../utils/ga4Channel'
+import { isPageViewEvent } from '../utils/eventType'
 import type { TagSpec } from '../utils/tagSpec'
 
 interface Props {
@@ -39,6 +41,12 @@ export default function AnalysisPage({
 
   const current = pages[pageIdx]
   const trackedItems = current.tracked_items ?? []
+  const interactiveTrackedItems = useMemo(
+    () => trackedItems.filter(
+      item => !isPageViewEvent(item.tracking_data?.event_name as string | undefined),
+    ),
+    [trackedItems],
+  )
   const networkTags = current.network_tags ?? []
   const visibleIssues = useMemo(
     () => current.issues.filter(issue => !sessionDismissedKeys.has(issueIdentityKey(issue))),
@@ -92,6 +100,23 @@ export default function AnalysisPage({
 
   const savedCodeForPage = getSavedCodeForPage(savedGeneratedCodes, current.url)
   const captureScrollRef = useRef<HTMLDivElement>(null)
+  const channelLabel = getPageChannelLabel(current)
+
+  const overlayIssues = panelTab === 'missing' || panelTab === 'all' ? visibleIssues : []
+  const overlayTrackedItems = panelTab === 'tracked' || panelTab === 'all' ? interactiveTrackedItems : []
+
+  const handlePanelTabChange = (tab: PanelTab) => {
+    setPanelTab(tab)
+    setSelectedAll(null)
+    if (tab === 'missing') {
+      setSelectedTracked(null)
+    } else if (tab === 'tracked') {
+      setSelectedIssue(null)
+    } else {
+      setSelectedIssue(null)
+      setSelectedTracked(null)
+    }
+  }
 
   return (
     <div className="h-screen bg-[#0F0F0F] flex flex-col overflow-hidden">
@@ -131,10 +156,15 @@ export default function AnalysisPage({
         </div>
 
         <div className="flex items-center gap-3 text-xs text-[#52525B]">
+          {channelLabel && (
+            <span className="px-2 py-0.5 rounded-md bg-[#2A2A2A] text-[#E4E4E7] font-medium">
+              {channelLabel}
+            </span>
+          )}
           <span className="font-mono text-purple-400">{current.tracking_id ?? 'G-1NWKV3S1TW'}</span>
           <span>요소 {current.element_count}개</span>
           <span className="text-blue-400 font-medium">전체 {networkTags.length}건</span>
-          <span className="text-emerald-400 font-medium">정상 {trackedItems.length}건</span>
+          <span className="text-emerald-400 font-medium">정상 {interactiveTrackedItems.length}건</span>
           <span className="text-red-400 font-medium">누락 {visibleIssues.length}건</span>
         </div>
       </div>
@@ -154,9 +184,14 @@ export default function AnalysisPage({
               <span className="truncate max-w-[160px] block">
                 {new URL(p.url).pathname || '/'}
               </span>
-              {(p.tracked_items?.length ?? 0) > 0 && (
-                <span className="ml-1 text-emerald-400">({p.tracked_items.length})</span>
-              )}
+              {(() => {
+                const count = (p.tracked_items ?? []).filter(
+                  item => !isPageViewEvent(item.tracking_data?.event_name as string | undefined),
+                ).length
+                return count > 0 ? (
+                  <span className="ml-1 text-emerald-400">({count})</span>
+                ) : null
+              })()}
               {p.issues.length > 0 && (
                 <span className="ml-1 text-red-400">({p.issues.length})</span>
               )}
@@ -171,21 +206,17 @@ export default function AnalysisPage({
             <div className="flex-shrink-0 flex items-center justify-between gap-3 px-4 py-2.5 border-b border-[#2A2A2A] bg-[#141414]/95 backdrop-blur-sm">
               <span className="text-xs font-medium text-[#A1A1AA]">화면 캡처</span>
               <div className="flex items-center gap-3 text-[11px] text-[#52525B]">
-                {(visibleIssues.length > 0 || trackedItems.length > 0) && (
-                  <>
-                    {trackedItems.length > 0 && (
-                      <span className="flex items-center gap-1.5">
-                        <span className="w-2.5 h-2.5 rounded border border-emerald-500/60 bg-emerald-500/15" />
-                        정상 {trackedItems.length}
-                      </span>
-                    )}
-                    {visibleIssues.length > 0 && (
-                      <span className="flex items-center gap-1.5">
-                        <span className="w-2.5 h-2.5 rounded border border-red-500/60 bg-red-500/15" />
-                        누락 {visibleIssues.length}
-                      </span>
-                    )}
-                  </>
+                {(panelTab === 'tracked' || panelTab === 'all') && interactiveTrackedItems.length > 0 && (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded border border-emerald-500/60 bg-emerald-500/15" />
+                    정상 {interactiveTrackedItems.length}
+                  </span>
+                )}
+                {(panelTab === 'missing' || panelTab === 'all') && visibleIssues.length > 0 && (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded border border-red-500/60 bg-red-500/15" />
+                    누락 {visibleIssues.length}
+                  </span>
                 )}
               </div>
             </div>
@@ -198,10 +229,10 @@ export default function AnalysisPage({
                 screenshotId={current.screenshot_id}
                 originalWidth={current.screenshot_width}
                 originalHeight={current.screenshot_height}
-                issues={visibleIssues}
-                trackedItems={trackedItems}
-                selectedIssueIndex={selectedIssue}
-                selectedTrackedIndex={selectedTracked}
+                issues={overlayIssues}
+                trackedItems={overlayTrackedItems}
+                selectedIssueIndex={panelTab === 'missing' || panelTab === 'all' ? selectedIssue : null}
+                selectedTrackedIndex={panelTab === 'tracked' || panelTab === 'all' ? selectedTracked : null}
                 scrollContainerRef={captureScrollRef}
                 onSelectIssue={handleSelectIssue}
                 onSelectTracked={handleSelectTracked}
@@ -213,7 +244,7 @@ export default function AnalysisPage({
         <div className="w-80 flex-shrink-0 border-l border-[#2A2A2A] bg-[#111] flex flex-col min-h-0 overflow-hidden">
           <div className="flex border-b border-[#2A2A2A]">
             <button
-              onClick={() => setPanelTab('all')}
+              onClick={() => handlePanelTabChange('all')}
               className={`flex-1 px-3 py-2.5 text-xs font-medium transition-colors ${
                 panelTab === 'all'
                   ? 'text-white border-b-2 border-blue-400'
@@ -223,7 +254,7 @@ export default function AnalysisPage({
               전체 ({networkTags.length})
             </button>
             <button
-              onClick={() => setPanelTab('missing')}
+              onClick={() => handlePanelTabChange('missing')}
               className={`flex-1 px-3 py-2.5 text-xs font-medium transition-colors ${
                 panelTab === 'missing'
                   ? 'text-white border-b-2 border-red-400'
@@ -233,14 +264,14 @@ export default function AnalysisPage({
               누락 ({visibleIssues.length})
             </button>
             <button
-              onClick={() => setPanelTab('tracked')}
+              onClick={() => handlePanelTabChange('tracked')}
               className={`flex-1 px-3 py-2.5 text-xs font-medium transition-colors ${
                 panelTab === 'tracked'
                   ? 'text-white border-b-2 border-emerald-400'
                   : 'text-[#52525B] hover:text-[#A1A1AA]'
               }`}
             >
-              정상 ({trackedItems.length})
+              정상 ({interactiveTrackedItems.length})
             </button>
           </div>
 
@@ -269,7 +300,7 @@ export default function AnalysisPage({
           ) : (
             <div className="flex-1 min-h-0 overflow-hidden">
               <TrackedPanel
-                trackedItems={trackedItems}
+                trackedItems={interactiveTrackedItems}
                 selectedIndex={selectedTracked}
                 onSelect={handlePanelSelectTracked}
               />

@@ -1,23 +1,25 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
+import { NavLink } from 'react-router-dom'
 import { AlertCircle, CheckCircle2, ClipboardList, FileSpreadsheet, Loader2, SearchCheck, Upload, WandSparkles } from 'lucide-react'
 import InputPage from './InputPage'
 import ReportTable from '../components/ReportTable'
+import { ROUTES } from '../routes/paths'
 import type { ScanStartOptions, TagRequestValidationResponse } from '../types'
 import { useTagRequestValidation } from '../hooks/useTagRequestValidation'
 
 export type MainSection = 'scan' | 'new' | 'report'
 
 interface Props {
+  section: MainSection
   onScanStart: (options: ScanStartOptions) => void
   onOpenHistoryDetail: (id: string) => void
   onTagRequestValidated: (result: TagRequestValidationResponse) => void
-  initialSection?: MainSection
 }
 
-const NAV_ITEMS: { key: MainSection; label: string; icon: typeof SearchCheck }[] = [
-  { key: 'scan', label: '검사하기', icon: SearchCheck },
-  { key: 'new', label: '신규추가', icon: FileSpreadsheet },
-  { key: 'report', label: '실행 리포트', icon: ClipboardList },
+const NAV_ITEMS: { key: MainSection; label: string; icon: typeof SearchCheck; path: string }[] = [
+  { key: 'scan', label: '검사하기', icon: SearchCheck, path: ROUTES.scan },
+  { key: 'new', label: '신규추가', icon: FileSpreadsheet, path: ROUTES.new },
+  { key: 'report', label: '실행 리포트', icon: ClipboardList, path: ROUTES.report },
 ]
 
 const TAG_REQUEST_FILE_EXTENSIONS = ['.xlsx', '.xls', '.csv']
@@ -27,8 +29,7 @@ function isSupportedTagRequestFile(file: File) {
   return TAG_REQUEST_FILE_EXTENSIONS.some((extension) => fileName.endsWith(extension))
 }
 
-export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagRequestValidated, initialSection = 'scan' }: Props) {
-  const [activeSection, setActiveSection] = useState<MainSection>(initialSection)
+export default function MainPage({ section, onScanStart, onOpenHistoryDetail, onTagRequestValidated }: Props) {
   const [uploadedFileName, setUploadedFileName] = useState('')
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [isDraggingFile, setIsDraggingFile] = useState(false)
@@ -42,10 +43,6 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagReques
     reset: resetTagRequestValidation,
   } = useTagRequestValidation()
   const tagRequestError = tagRequestInputError ?? tagRequestValidationError
-
-  useEffect(() => {
-    setActiveSection(initialSection)
-  }, [initialSection])
 
   const applyUploadedFile = (file: File | null) => {
     if (isValidatingTagRequest) return
@@ -115,24 +112,26 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagReques
         </div>
 
         <nav className="flex-1 p-3 space-y-1">
-          {NAV_ITEMS.map(({ key, label, icon: Icon }) => {
-            const isActive = activeSection === key
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setActiveSection(key)}
-                className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all ${
+          {NAV_ITEMS.map(({ key, label, icon: Icon, path }) => (
+            <NavLink
+              key={key}
+              to={path}
+              className={({ isActive }) =>
+                `w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all border ${
                   isActive
-                    ? 'bg-purple-600/20 text-white border border-purple-500/30'
-                    : 'text-[#71717A] hover:text-white hover:bg-white/[0.04] border border-transparent'
-                }`}
-              >
-                <Icon size={18} className={isActive ? 'text-purple-400' : ''} />
-                {label}
-              </button>
-            )
-          })}
+                    ? 'bg-purple-600/20 text-white border-purple-500/30'
+                    : 'text-[#71717A] hover:text-white hover:bg-white/[0.04] border-transparent'
+                }`
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  <Icon size={18} className={isActive ? 'text-purple-400' : ''} />
+                  {label}
+                </>
+              )}
+            </NavLink>
+          ))}
         </nav>
       </aside>
 
@@ -143,7 +142,7 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagReques
         </div>
 
         <main className="relative z-10 h-full overflow-y-auto px-6 py-10 lg:px-10">
-          {activeSection === 'scan' && (
+          {section === 'scan' && (
             <div className="mx-auto w-full max-w-2xl animate-fade-in">
               <div className="text-center mb-8">
                 <p className="text-sm text-purple-400 mb-2">검사하기</p>
@@ -156,7 +155,7 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagReques
             </div>
           )}
 
-          {activeSection === 'new' && (
+          {section === 'new' && (
             <section className="mx-auto w-full max-w-2xl animate-fade-in">
               <div className="mb-8 text-center">
                 <p className="text-sm text-purple-400 mb-2">신규추가</p>
@@ -308,7 +307,7 @@ export default function MainPage({ onScanStart, onOpenHistoryDetail, onTagReques
             </section>
           )}
 
-          {activeSection === 'report' && (
+          {section === 'report' && (
             <div className="mx-auto w-full max-w-5xl">
               <ReportTable onOpenDetail={onOpenHistoryDetail} />
             </div>
