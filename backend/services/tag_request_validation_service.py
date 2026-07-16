@@ -1,19 +1,13 @@
-import asyncio
-import base64
-import json
 import logging
-import os
-import re
+from collections import defaultdict
 from typing import Any, Awaitable, Callable, Dict, List, Optional
-
-from openai import AzureOpenAI
 
 from models.bounding_box import BoundingBox
 from models.network_tag_hit import NetworkTagHit
 from models.page_element import PageElement
 from models.scan_request import ScanRange
-from models.screenshot_segment import ScreenshotSegment
 from models.tag_request_validation import (
+    TagRequestCandidateResult,
     TagRequestItem,
     TagRequestMatch,
     TagRequestSheetResult,
@@ -21,12 +15,23 @@ from models.tag_request_validation import (
     TagRequestValidationItem,
     TagRequestValidationResponse,
 )
-from config import settings
 from services.page_scan_service import collect_page_data_with_clean_capture
 from services.hybrid_tag_judgment_service import HybridTagJudgmentResolver
 from services.tag_request_excel_service import ParsedTagRequestSheet, parse_tag_request_workbook
+from services.tag_request_matching_service import (
+    RequestParameterMatch,
+    match_request_parameters,
+)
+from services.tag_request_reference_service import (
+    TagRequestReferenceRule,
+    build_tag_request_reference_rules,
+)
 from services.tracking.event_normalizer import EP_FIELDS, event_name_from_dict, extract_ep_params, params_from_event_dict
-from services.tracking_filter_service import filter_network_tags, normalize_tracking_id
+from services.tracking_filter_service import (
+    filter_elements_by_tracking_id,
+    filter_network_tags,
+    normalize_tracking_id,
+)
 
 logger = logging.getLogger(__name__)
 ProgressReporter = Callable[[Dict[str, Any]], Awaitable[None]]
@@ -111,6 +116,15 @@ async def _validate_sheet(
     if not sheet.items:
         return _sheet_error(sheet, "태깅 요청 항목을 찾지 못했습니다.")
 
+    reference_rules = build_tag_request_reference_rules(sheet)
+    rules_by_row: Dict[int, List[TagRequestReferenceRule]] = defaultdict(list)
+    for rule in reference_rules:
+        rules_by_row[rule.request_row_number].append(rule)
+    verification_only = all(
+        bool(rules_by_row.get(item.row_number))
+        for item in sheet.items
+    )
+
     try:
         (
             screenshot_segments,
@@ -123,6 +137,12 @@ async def _validate_sheet(
             sheet.url,
             scan_range=ScanRange(preset="full"),
             progress=progress,
+            verification_rules=[rule.to_browser_payload() for rule in reference_rules],
+            verification_only=verification_only,
+        )
+        tracking_elements = filter_elements_by_tracking_id(
+            tracking_elements,
+            tracking_id,
         )
         network_tags = filter_network_tags(network_tags, tracking_id)
     except Exception as exc:
@@ -135,26 +155,28 @@ async def _validate_sheet(
     rag_resolver = HybridTagJudgmentResolver(sheet.url)
     items: List[TagRequestValidationItem] = []
     for item_index, item in enumerate(sheet.items, start=1):
-        items.append(_validate_request_item(
-            item,
-            network_tags,
-            tracking_elements,
-            capture_elements,
-            rag_resolver,
-        ))
+        item_rules = rules_by_row.get(item.row_number, [])
+        if item_rules:
+            validation_item = _validate_request_candidates(
+                item,
+                item_rules,
+                tracking_elements,
+                capture_elements,
+            )
+        else:
+            validation_item = _validate_request_item(
+                item,
+                network_tags,
+                tracking_elements,
+                capture_elements,
+                rag_resolver,
+            )
+        items.append(validation_item)
         await _report_progress(progress, {
             "type": "matching_progress",
             "current": item_index,
             "total": len(sheet.items),
         })
-    await _apply_ai_bounding_box_fallback(
-        items,
-        capture_elements,
-        screenshot_segments,
-        width,
-        height,
-        progress=progress,
-    )
     await _report_progress(progress, {
         "type": "matching_done",
         "itemTotal": len(items),
@@ -221,7 +243,8 @@ def _validate_request_item(
             continue
 
         actual_params = extract_ep_params(hit)
-        missing_fields = _missing_fields(request, actual_params)
+        parameter_match = match_request_parameters(request, actual_params)
+        missing_fields = parameter_match.missing_fields
         if not missing_fields:
             bounding_box = _find_capture_bounding_box(
                 request,
@@ -232,7 +255,7 @@ def _validate_request_item(
                 request=request,
                 status="normal",
                 bounding_box=bounding_box,
-                substitutions=_extract_substitutions(request, actual_params),
+                substitutions=_substitutions_from_match(parameter_match),
                 judgment_source="rule",
                 judgment_reason="실제 GA 이벤트가 요청 명세와 일치합니다.",
                 matched_tag=TagRequestMatch(
@@ -297,6 +320,205 @@ def _validate_request_item(
         ),
         rag_score=evidence.score,
         matched_tag=None,
+    )
+
+
+def _validate_request_candidates(
+    request: TagRequestItem,
+    rules: List[TagRequestReferenceRule],
+    tracking_elements: List[PageElement],
+    capture_elements: List[PageElement],
+) -> TagRequestValidationItem:
+    rule_ids = {rule.rule_id for rule in rules}
+    candidate_groups: Dict[str, List[PageElement]] = defaultdict(list)
+    for element in tracking_elements:
+        if not rule_ids.intersection(element.request_rule_ids):
+            continue
+        key = element.request_candidate_key or (
+            f"{','.join(sorted(rule_ids.intersection(element.request_rule_ids)))}|"
+            f"{element.selector}|{element.element_index}"
+        )
+        candidate_groups[key].append(element)
+
+    if not candidate_groups:
+        return TagRequestValidationItem(
+            request=request,
+            status="review",
+            missing_fields=["dom_candidate"],
+            judgment_source="rule",
+            judgment_reason=(
+                "ga4Common 규칙은 확인했지만 현재 페이지에서 검사할 대상 요소를 찾지 못했습니다."
+            ),
+        )
+
+    candidate_results: List[TagRequestCandidateResult] = []
+    for candidate_key, elements in candidate_groups.items():
+        representative = _pick_candidate_representative(elements)
+        bounding_box = _find_candidate_capture_box(
+            candidate_key,
+            representative,
+            capture_elements,
+        )
+        candidate_results.append(_validate_candidate_element(
+            request,
+            candidate_key,
+            representative,
+            bounding_box,
+        ))
+
+    missing_count = sum(1 for result in candidate_results if result.status == "missing")
+    review_count = sum(1 for result in candidate_results if result.status == "review")
+    normal_count = sum(1 for result in candidate_results if result.status == "normal")
+    tested_count = sum(1 for result in candidate_results if result.click_tested)
+    if missing_count:
+        status = "missing"
+    elif review_count:
+        status = "review"
+    else:
+        status = "normal"
+
+    primary = next(
+        (result for result in candidate_results if result.status == status),
+        candidate_results[0],
+    )
+    missing_fields = list(dict.fromkeys(
+        field
+        for result in candidate_results
+        if result.status != "normal"
+        for field in result.missing_fields
+    ))
+    substitutions = _unique_substitutions(
+        substitution
+        for result in candidate_results
+        if result.status == "normal"
+        for substitution in result.substitutions
+    )
+    matched_tag = next(
+        (result.matched_tag for result in candidate_results if result.matched_tag),
+        None,
+    )
+
+    return TagRequestValidationItem(
+        request=request,
+        status=status,
+        missing_fields=missing_fields,
+        bounding_box=primary.bounding_box,
+        substitutions=substitutions,
+        match_source="rule",
+        judgment_source="rule",
+        judgment_reason=(
+            f"대상 후보 {len(candidate_results)}개 중 정상 {normal_count}개, "
+            f"누락 {missing_count}개, 확인 필요 {review_count}개입니다."
+        ),
+        matched_tag=matched_tag,
+        candidate_count=len(candidate_results),
+        tested_count=tested_count,
+        matched_count=normal_count,
+        missing_candidate_count=missing_count,
+        review_candidate_count=review_count,
+        candidate_results=candidate_results,
+    )
+
+
+def _pick_candidate_representative(elements: List[PageElement]) -> PageElement:
+    return min(
+        elements,
+        key=lambda element: (
+            0 if element.click_tested and element.click_tracking_events else 1,
+            0 if element.click_tested else 1,
+            0 if element.bounding_box else 1,
+            element.element_index,
+        ),
+    )
+
+
+def _find_candidate_capture_box(
+    candidate_key: str,
+    tracking_element: PageElement,
+    capture_elements: List[PageElement],
+) -> Optional[BoundingBox]:
+    exact = next(
+        (
+            element for element in capture_elements
+            if element.request_candidate_key == candidate_key and element.bounding_box
+        ),
+        None,
+    )
+    if exact:
+        return exact.bounding_box
+    corresponding = _find_corresponding_capture_element(tracking_element, capture_elements)
+    return corresponding.bounding_box if corresponding else None
+
+
+def _validate_candidate_element(
+    request: TagRequestItem,
+    candidate_key: str,
+    element: PageElement,
+    bounding_box: Optional[BoundingBox],
+) -> TagRequestCandidateResult:
+    if not element.click_tested:
+        return TagRequestCandidateResult(
+            candidate_key=candidate_key,
+            element_selector=element.selector,
+            element_text=element.text or "",
+            status="review",
+            click_tested=False,
+            bounding_box=bounding_box,
+            missing_fields=["click_unavailable"],
+            reason="요소를 클릭하지 못해 실제 이벤트 발생 여부를 확인할 수 없습니다.",
+        )
+
+    target_events = [
+        event
+        for event in element.click_tracking_events
+        if event_name_from_dict(event) == request.event_name
+    ]
+    if not target_events:
+        return TagRequestCandidateResult(
+            candidate_key=candidate_key,
+            element_selector=element.selector,
+            element_text=element.text or "",
+            status="missing",
+            click_tested=True,
+            bounding_box=bounding_box,
+            missing_fields=["event_name", *EP_FIELDS],
+            reason="클릭은 수행됐지만 요청한 click_* 이벤트가 발생하지 않았습니다.",
+        )
+
+    evaluated: List[tuple[RequestParameterMatch, Dict[str, str], Dict[str, Any]]] = []
+    for event in target_events:
+        actual_params = params_from_event_dict(event)
+        evaluated.append((
+            match_request_parameters(request, actual_params),
+            actual_params,
+            event,
+        ))
+    parameter_match, actual_params, event = min(
+        evaluated,
+        key=lambda result: len(result[0].missing_fields),
+    )
+    matched_tag = TagRequestMatch(
+        event_name=request.event_name,
+        ep_button_area=actual_params.get("ep_button_area", ""),
+        ep_button_area2=actual_params.get("ep_button_area2", ""),
+        ep_button_name=actual_params.get("ep_button_name", ""),
+        trigger=str(event.get("trigger") or "click"),
+    )
+    return TagRequestCandidateResult(
+        candidate_key=candidate_key,
+        element_selector=element.selector,
+        element_text=element.text or "",
+        status="normal" if parameter_match.matched else "missing",
+        click_tested=True,
+        bounding_box=bounding_box,
+        missing_fields=parameter_match.missing_fields,
+        substitutions=_substitutions_from_match(parameter_match),
+        matched_tag=matched_tag,
+        reason=(
+            "실제 GA 이벤트가 요청 명세와 일치합니다."
+            if parameter_match.matched
+            else "실제 이벤트는 발생했지만 요청 명세와 일치하지 않습니다."
+        ),
     )
 
 
@@ -377,303 +599,39 @@ def _normalize_element_text(value: Optional[str]) -> str:
 
 
 def _missing_fields(request: TagRequestItem, actual_params: Dict[str, str]) -> List[str]:
-    missing = []
-    expected = {
-        "ep_button_area": request.ep_button_area,
-        "ep_button_area2": request.ep_button_area2,
-        "ep_button_name": request.ep_button_name,
-    }
-    for field, expected_value in expected.items():
-        if expected_value and not _template_matches(expected_value, actual_params.get(field, "")):
-            missing.append(field)
-    return missing
-
-
-def _template_matches(expected: str, actual: str) -> bool:
-    expected = (expected or "").strip()
-    actual = (actual or "").strip()
-    if not expected:
-        return True
-    if not actual:
-        return False
-
-    pattern_parts = []
-    last_index = 0
-    for match in re.finditer(r"\{\{[^{}]+\}\}", expected):
-        pattern_parts.append(re.escape(expected[last_index:match.start()]))
-        pattern_parts.append(r".+")
-        last_index = match.end()
-    pattern_parts.append(re.escape(expected[last_index:]))
-    return re.fullmatch("".join(pattern_parts), actual) is not None
+    return match_request_parameters(request, actual_params).missing_fields
 
 
 def _extract_substitutions(request: TagRequestItem, actual_params: Dict[str, str]) -> List[TagRequestSubstitution]:
-    substitutions: List[TagRequestSubstitution] = []
-    expected_by_field = {
-        "ep_button_area": request.ep_button_area,
-        "ep_button_area2": request.ep_button_area2,
-        "ep_button_name": request.ep_button_name,
-    }
-    for field, expected in expected_by_field.items():
-        actual = actual_params.get(field, "")
-        substitutions.extend(_extract_field_substitutions(field, expected, actual))
-    return substitutions
+    return _substitutions_from_match(match_request_parameters(request, actual_params))
 
 
-def _extract_field_substitutions(field: str, expected: str, actual: str) -> List[TagRequestSubstitution]:
-    expected = (expected or "").strip()
-    actual = (actual or "").strip()
-    placeholders = [match.group(0) for match in re.finditer(r"\{\{[^{}]+\}\}", expected)]
-    if not placeholders or not actual:
-        return []
-
-    pattern_parts = []
-    last_index = 0
-    for idx, match in enumerate(re.finditer(r"\{\{[^{}]+\}\}", expected)):
-        pattern_parts.append(re.escape(expected[last_index:match.start()]))
-        pattern_parts.append(f"(?P<v{idx}>.+?)")
-        last_index = match.end()
-    pattern_parts.append(re.escape(expected[last_index:]))
-
-    match = re.fullmatch("".join(pattern_parts), actual)
-    if not match:
-        if len(placeholders) == 1:
-            return [TagRequestSubstitution(field=field, placeholder=placeholders[0], value=actual)]
-        return []
-
+def _substitutions_from_match(
+    parameter_match: RequestParameterMatch,
+) -> List[TagRequestSubstitution]:
     return [
-        TagRequestSubstitution(field=field, placeholder=placeholder, value=match.group(f"v{idx}"))
-        for idx, placeholder in enumerate(placeholders)
-    ]
-
-
-async def _apply_ai_bounding_box_fallback(
-    items: List[TagRequestValidationItem],
-    elements: List[PageElement],
-    screenshot_segments: List[ScreenshotSegment],
-    width: int,
-    height: int,
-    progress: Optional[ProgressReporter] = None,
-) -> None:
-    pending = [item for item in items if item.bounding_box is None]
-    if not pending or not settings.azure_openai_key or not settings.azure_openai_endpoint:
-        return
-
-    if not screenshot_segments:
-        return
-    if any(
-        not os.path.exists(os.path.join(settings.screenshot_dir, f"{segment.screenshot_id}.png"))
-        for segment in screenshot_segments
-    ):
-        return
-
-    await _report_progress(progress, {
-        "type": "ai_matching_start",
-        "itemTotal": len(pending),
-    })
-    try:
-        ai_matches = await asyncio.to_thread(
-            _ask_ai_for_request_matches,
-            pending,
-            elements,
-            screenshot_segments,
-            width,
-            height,
+        TagRequestSubstitution(
+            field=binding.field,
+            placeholder=binding.placeholder,
+            value=binding.value,
         )
-    except Exception as exc:
-        logger.warning("AI tag request matching skipped: %s", exc)
-        await _report_progress(progress, {
-            "type": "ai_matching_done",
-            "matchedCount": 0,
-        })
-        return
-    await _report_progress(progress, {
-        "type": "ai_matching_done",
-        "matchedCount": len(ai_matches),
-    })
-
-    element_lookup: Dict[str, List[PageElement]] = {}
-    for element in elements:
-        if not element.bounding_box:
-            continue
-        key = f"{element.selector}|{element.text or ''}"
-        element_lookup.setdefault(key, []).append(element)
-
-    for item in pending:
-        match = ai_matches.get(item.request.request_no)
-        if not match:
-            continue
-
-        element = _find_ai_matched_element(match, element_lookup, screenshot_segments)
-        if element and element.bounding_box:
-            item.bounding_box = element.bounding_box
-            item.match_source = "ai"
-            continue
-
-        raw_box = match.get("bounding_box")
-        if isinstance(raw_box, dict):
-            try:
-                segment_index = _match_segment_index(match, screenshot_segments)
-                if segment_index is None:
-                    continue
-                segment = screenshot_segments[segment_index]
-
-                item.bounding_box = BoundingBox(
-                    x=float(raw_box.get("x", 0)),
-                    y=float(raw_box.get("y", 0)) + segment.offset_y,
-                    width=float(raw_box.get("width", 0)),
-                    height=float(raw_box.get("height", 0)),
-                )
-                item.match_source = "ai"
-            except (TypeError, ValueError):
-                continue
-
-
-def _ask_ai_for_request_matches(
-    items: List[TagRequestValidationItem],
-    elements: List[PageElement],
-    screenshot_segments: List[ScreenshotSegment],
-    width: int,
-    height: int,
-) -> Dict[str, Dict[str, object]]:
-    client = AzureOpenAI(
-        api_key=settings.azure_openai_key,
-        api_version=settings.azure_openai_api_version,
-        azure_endpoint=settings.azure_openai_endpoint,
-    )
-    requests_json = json.dumps([
-        {
-            "request_no": item.request.request_no,
-            "event_name": item.request.event_name,
-            "ep_button_area": item.request.ep_button_area,
-            "ep_button_area2": item.request.ep_button_area2,
-            "ep_button_name": item.request.ep_button_name,
-        }
-        for item in items
-    ], ensure_ascii=False)
-    elements_json = json.dumps([
-        {
-            "selector": element.selector,
-            "text": element.text or "",
-            "bounding_box": element.bounding_box.model_dump() if element.bounding_box else None,
-            "segment_index": _segment_index_for_box(element.bounding_box, screenshot_segments),
-        }
-        for element in elements
-        if element.bounding_box
-    ][:250], ensure_ascii=False)
-
-    prompt = f"""
-You are helping match GA4 tagging request rows to visible elements on a duty-free page.
-The full page is split into {len(screenshot_segments)} screenshot segments.
-Each segment label provides its zero-based index and global page Y offset.
-Use all screenshot segments and the interactive element list. Prefer returning an element from the provided list.
-Persistent headers and bottom navigation are context only. Never match requests to those controls.
-
-Full page size: {width}x{height}
-
-Requests:
-{requests_json}
-
-Interactive elements:
-{elements_json}
-
-Return JSON only:
-{{
-  "matches": [
-    {{
-      "request_no": "1",
-      "segment_index": 0,
-      "selector": "selector from provided element list if possible",
-      "text": "text from provided element list if possible",
-      "bounding_box": {{"x": 0, "y": 0, "width": 0, "height": 0}},
-      "reason": "short Korean reason"
-    }}
-  ]
-}}
-bounding_box coordinates must be relative to the selected screenshot segment, not the full page.
-If no reasonable visual match exists for a request, omit it.
-"""
-    image_content = []
-    for index, segment in enumerate(screenshot_segments):
-        screenshot_path = os.path.join(settings.screenshot_dir, f"{segment.screenshot_id}.png")
-        with open(screenshot_path, "rb") as file:
-            image_b64 = base64.b64encode(file.read()).decode()
-        image_content.extend([
-            {
-                "type": "text",
-                "text": (
-                    f"Screenshot segment {index}: global y offset {segment.offset_y}, "
-                    f"size {segment.width}x{segment.height}"
-                ),
-            },
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{image_b64}", "detail": "high"},
-            },
-        ])
-    image_content.append({"type": "text", "text": prompt})
-
-    response = client.chat.completions.create(
-        model=settings.azure_openai_deployment,
-        messages=[{
-            "role": "user",
-            "content": image_content,
-        }],
-        response_format={"type": "json_object"},
-        max_tokens=4096,
-    )
-    parsed = json.loads(response.choices[0].message.content or "{}")
-    return {
-        str(match.get("request_no")): match
-        for match in parsed.get("matches", [])
-        if isinstance(match, dict) and match.get("request_no")
-    }
-
-
-def _segment_index_for_box(
-    box: Optional[BoundingBox],
-    screenshot_segments: List[ScreenshotSegment],
-) -> Optional[int]:
-    if not box:
-        return None
-
-    center_y = box.y + (box.height / 2)
-    for index, segment in enumerate(screenshot_segments):
-        if segment.offset_y <= center_y < segment.offset_y + segment.height:
-            return index
-    return None
-
-
-def _find_ai_matched_element(
-    match: Dict[str, object],
-    element_lookup: Dict[str, List[PageElement]],
-    screenshot_segments: List[ScreenshotSegment],
-) -> Optional[PageElement]:
-    key = f"{match.get('selector', '')}|{match.get('text', '')}"
-    candidates = element_lookup.get(key, [])
-    if len(candidates) == 1:
-        return candidates[0]
-
-    segment_index = _match_segment_index(match, screenshot_segments)
-    if segment_index is None:
-        return None
-    segment_candidates = [
-        element
-        for element in candidates
-        if _segment_index_for_box(element.bounding_box, screenshot_segments) == segment_index
+        for binding in parameter_match.field_bindings
     ]
-    return segment_candidates[0] if len(segment_candidates) == 1 else None
 
 
-def _match_segment_index(
-    match: Dict[str, object],
-    screenshot_segments: List[ScreenshotSegment],
-) -> Optional[int]:
-    raw_index = match.get("segment_index")
-    if raw_index is None and len(screenshot_segments) == 1:
-        return 0
-    try:
-        index = int(raw_index)
-    except (TypeError, ValueError):
-        return None
-    return index if 0 <= index < len(screenshot_segments) else None
+def _unique_substitutions(
+    substitutions,
+) -> List[TagRequestSubstitution]:
+    unique: List[TagRequestSubstitution] = []
+    seen: set[tuple[str, str, str]] = set()
+    for substitution in substitutions:
+        key = (
+            substitution.field,
+            substitution.placeholder,
+            substitution.value,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(substitution)
+    return unique

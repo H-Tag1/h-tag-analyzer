@@ -15,6 +15,7 @@ NAMESPACES = {
 }
 SKIP_SHEET_NAMES = {"가이드", "작성 예시"}
 URL_PATTERN = re.compile(r"https?://[^\s]+")
+EXAMPLE_MARKER_PATTERN = re.compile(r"(?:/\s*)?(?:ex\.|예\s*:)", re.IGNORECASE)
 
 
 @dataclass
@@ -208,11 +209,14 @@ def _parse_request_items(
         blank_rows = 0
 
         params = {}
+        examples: Dict[str, List[str]] = {}
         for param_col in param_cols:
             key = row.get(param_col, "").strip()
-            value = _clean_param_value(row.get(param_col + 1, ""))
+            value, field_examples = _parse_param_value(row.get(param_col + 1, ""))
             if key:
                 params[key] = value
+                if field_examples:
+                    examples[key] = field_examples
 
         request_no = row.get(event_col + 1, "").strip()
         event_name = row.get(event_col, "").strip() or fallback_event_name or ""
@@ -229,6 +233,7 @@ def _parse_request_items(
             ep_button_area=params.get("ep_button_area", ""),
             ep_button_area2=params.get("ep_button_area2", ""),
             ep_button_name=params.get("ep_button_name", ""),
+            examples=examples,
         ))
     return items
 
@@ -240,14 +245,27 @@ def _find_col(row: Dict[int, str], label: str) -> Optional[int]:
     return None
 
 
-def _clean_param_value(value: str) -> str:
+def _parse_param_value(value: str) -> tuple[str, List[str]]:
     text = (value or "").strip()
     if not text:
-        return ""
+        return "", []
 
-    first_line = next((line.strip() for line in text.splitlines() if line.strip()), text)
-    for marker in (" / ex.", "/ ex.", " ex.", " 예:"):
-        marker_index = first_line.find(marker)
-        if marker_index >= 0:
-            first_line = first_line[:marker_index]
-    return first_line.strip()
+    marker = EXAMPLE_MARKER_PATTERN.search(text)
+    template_source = text[:marker.start()] if marker else text
+    template = next(
+        (line.strip() for line in template_source.splitlines() if line.strip()),
+        template_source.strip(),
+    )
+    if not marker:
+        return template, []
+
+    examples = [
+        line.strip().lstrip("-• ").strip()
+        for line in text[marker.end():].splitlines()
+        if line.strip().lstrip("-• ").strip()
+    ]
+    return template, examples
+
+
+def _clean_param_value(value: str) -> str:
+    return _parse_param_value(value)[0]

@@ -96,6 +96,8 @@ async def collect_page_data_with_clean_capture(
     url: str,
     scan_range: Optional[ScanRange] = None,
     progress: Optional[ProgressReporter] = None,
+    verification_rules: Optional[List[Dict[str, str]]] = None,
+    verification_only: bool = False,
 ) -> Tuple[List[ScreenshotSegment], int, int, List[PageElement], List[PageElement], List[NetworkTagHit]]:
     """
     Returns: (screenshot_segments, width, height, tracking_elements, capture_elements, network_tags)
@@ -124,6 +126,8 @@ async def collect_page_data_with_clean_capture(
                 exclude_persistent_navigation=True,
                 scan_range=scan_range,
                 progress=progress,
+                verification_rules=verification_rules,
+                verification_only=verification_only,
             )
             await _report_progress(progress, {
                 "type": "tracking_collected",
@@ -141,6 +145,8 @@ async def collect_page_data_with_clean_capture(
                 capture_page,
                 exclude_persistent_navigation=True,
                 scan_range=scan_range,
+                verification_rules=verification_rules,
+                include_hidden_rule_matches=False,
             )
             navigation_capture = await _capture_persistent_navigation(capture_page)
             screenshot_segments, width, height, screenshot_offset_y = await _take_capture_screenshots(
@@ -239,12 +245,17 @@ async def _collect_tracking_data(
     exclude_persistent_navigation: bool = False,
     scan_range: Optional[ScanRange] = None,
     progress: Optional[ProgressReporter] = None,
+    verification_rules: Optional[List[Dict[str, str]]] = None,
+    verification_only: bool = False,
 ) -> Tuple[List[PageElement], List[Dict[str, Any]], List[NetworkTagHit]]:
     elements = await _collect_elements(
         page,
         exclude_auth_actions=exclude_auth_actions,
         exclude_persistent_navigation=exclude_persistent_navigation,
         scan_range=scan_range,
+        verification_rules=verification_rules,
+        include_hidden_rule_matches=bool(verification_rules),
+        verification_only=verification_only,
     )
     elements = await apply_click_grouping_with_llm(elements)
     grouped_count = sum(1 for element in elements if element.click_group_id)
@@ -281,9 +292,17 @@ async def _collect_elements(
     exclude_auth_actions: bool = False,
     exclude_persistent_navigation: bool = False,
     scan_range: Optional[ScanRange] = None,
+    verification_rules: Optional[List[Dict[str, str]]] = None,
+    include_hidden_rule_matches: bool = False,
+    verification_only: bool = False,
 ) -> List[PageElement]:
     vertical_range = await _resolve_scan_range(page, scan_range)
-    raw = await page.evaluate("""() => {
+    raw = await page.evaluate("""(payload) => {
+        const verificationRules = Array.isArray(payload.verificationRules)
+            ? payload.verificationRules
+            : [];
+        const includeHiddenRuleMatches = Boolean(payload.includeHiddenRuleMatches);
+        const verificationOnly = Boolean(payload.verificationOnly);
         const TRACKING_ATTR_PREFIXES = ['data-gtm', 'data-ga', 'data-analytics', 'data-track', 'data-event'];
         const TRACKING_ATTR_EXACT = ['data-category', 'data-action', 'data-label', 'data-ecommerce'];
 
@@ -355,29 +374,69 @@ async def _collect_elements(
             return '';
         }
 
+        function matchingRules(el) {
+            return verificationRules.filter(rule => {
+                if (!rule || !rule.selector) return false;
+                try {
+                    return el.matches(rule.selector);
+                } catch (_error) {
+                    return false;
+                }
+            });
+        }
+
+        function elementText(el) {
+            const imageAlt = el.querySelector?.('img[alt]')?.getAttribute('alt') || '';
+            return (
+                el.innerText ||
+                el.value ||
+                el.title ||
+                el.getAttribute('aria-label') ||
+                imageAlt ||
+                ''
+            ).trim().slice(0, 120);
+        }
+
+        function isVisible(el, rect, style) {
+            return (
+                rect.width > 0 &&
+                rect.height > 0 &&
+                rect.bottom > 0 &&
+                rect.right > 0 &&
+                style.display !== 'none' &&
+                style.visibility !== 'hidden' &&
+                Number(style.opacity || '1') > 0
+            );
+        }
+
+        function buildCandidateKey(el, rules, text) {
+            if (!rules.length) return '';
+            const href = el.getAttribute('href') || '';
+            const imageAlt = el.querySelector?.('img[alt]')?.getAttribute('alt') || '';
+            const itemText = el.closest('li')?.innerText || '';
+            return [
+                rules.map(rule => rule.rule_id).sort().join(','),
+                href,
+                text,
+                imageAlt,
+                itemText,
+            ].join('|').replace(/\s+/g, '').slice(0, 600);
+        }
+
         return Array.from(document.querySelectorAll('button, a, [onclick], input[type="submit"], input[type="button"]'))
-            .filter(el => {
+            .map((el, domIndex) => {
                 const rect = el.getBoundingClientRect();
                 const style = window.getComputedStyle(el);
-                return (
-                    rect.width > 0 &&
-                    rect.height > 0 &&
-                    rect.bottom > 0 &&
-                    rect.right > 0 &&
-                    style.display !== 'none' &&
-                    style.visibility !== 'hidden' &&
-                    Number(style.opacity || '1') > 0
-                );
-            })
-            .map((el, index) => {
-                const rect = el.getBoundingClientRect();
+                const rules = matchingRules(el);
+                const text = elementText(el);
                 const scrollX = window.scrollX || window.pageXOffset || 0;
                 const scrollY = window.scrollY || window.pageYOffset || 0;
                 const staticTrackingSignals = collectSignals(el);
                 return {
-                    element_index: index,
+                    dom_index: domIndex,
+                    visible: isVisible(el, rect, style),
                     selector: buildSelector(el),
-                    text: (el.innerText || el.value || el.title || el.getAttribute('aria-label') || '').trim().slice(0, 120),
+                    text,
                     element_type: el.tagName.toLowerCase(),
                     structure_group_key: buildStructureGroupKey(el),
                     bounding_box: {
@@ -391,10 +450,28 @@ async def _collect_elements(
                     in_persistent_navigation: Boolean(
                         el.closest('[data-h-tag-persistent-navigation]')
                     ),
+                    request_rule_ids: rules.map(rule => rule.rule_id),
+                    request_rule_selectors: rules.map(rule => rule.selector),
+                    request_candidate_key: buildCandidateKey(el, rules, text),
                 };
             })
+            .filter(item => (
+                verificationOnly
+                    ? item.request_rule_ids.length > 0
+                    : item.visible || (
+                        includeHiddenRuleMatches && item.request_rule_ids.length > 0
+                    )
+            ))
+            .map((item, index) => ({
+                ...item,
+                element_index: index,
+            }))
             .slice(0, 500);
-    }""")
+    }""", {
+        "verificationRules": verification_rules or [],
+        "includeHiddenRuleMatches": include_hidden_rule_matches,
+        "verificationOnly": verification_only,
+    })
 
     elements = []
     for item in raw:
@@ -407,15 +484,24 @@ async def _collect_elements(
         if vertical_range and not _intersects_vertical_range(bb_data, vertical_range):
             continue
 
+        has_visible_box = bool(
+            bb_data
+            and float(bb_data.get("width") or 0) > 0
+            and float(bb_data.get("height") or 0) > 0
+        )
         elements.append(PageElement(
             selector=item["selector"],
             text=item.get("text") or None,
             element_type=item["element_type"],
-            bounding_box=BoundingBox(**bb_data) if bb_data else None,
+            bounding_box=BoundingBox(**bb_data) if has_visible_box else None,
             element_index=item.get("element_index", 0),
             has_ga_tag=item.get("has_ga_tag", False),
             static_tracking_signals=parse_static_signals(item.get("static_tracking_signals", [])),
             structure_group_key=item.get("structure_group_key") or None,
+            request_rule_ids=list(item.get("request_rule_ids") or []),
+            request_rule_selectors=list(item.get("request_rule_selectors") or []),
+            request_candidate_key=item.get("request_candidate_key") or None,
+            request_dom_index=int(item.get("dom_index", -1)),
         ))
     return elements
 

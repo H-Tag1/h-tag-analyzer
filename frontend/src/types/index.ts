@@ -98,6 +98,7 @@ export interface TagRequestItem {
   ep_button_area: string
   ep_button_area2: string
   ep_button_name: string
+  examples: Record<string, string[]>
 }
 
 export interface TagRequestMatch {
@@ -114,6 +115,19 @@ export interface TagRequestSubstitution {
   value: string
 }
 
+export interface TagRequestCandidateResult {
+  candidate_key: string
+  element_selector: string
+  element_text: string
+  status: 'normal' | 'missing' | 'review'
+  click_tested: boolean
+  bounding_box?: BoundingBox | null
+  missing_fields: string[]
+  substitutions: TagRequestSubstitution[]
+  matched_tag?: TagRequestMatch | null
+  reason: string
+}
+
 export interface TagRequestValidationItem {
   request: TagRequestItem
   status: 'normal' | 'missing' | 'review'
@@ -125,6 +139,12 @@ export interface TagRequestValidationItem {
   judgment_reason: string
   rag_score?: number | null
   matched_tag?: TagRequestMatch | null
+  candidate_count: number
+  tested_count: number
+  matched_count: number
+  missing_candidate_count: number
+  review_candidate_count: number
+  candidate_results: TagRequestCandidateResult[]
 }
 
 export interface ScreenshotSegment {

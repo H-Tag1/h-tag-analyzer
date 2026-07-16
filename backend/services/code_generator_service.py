@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from openai import AzureOpenAI
 
@@ -182,33 +182,150 @@ def _strip_code_fence(raw: str) -> str:
 
 
 def parse_ga_event_call(source: str) -> Dict[str, Any]:
-    match = re.search(
-        r"GA_Event\s*\(\s*"
-        r"(['\"])(?P<event_name>.*?)\1\s*,\s*"
-        r"(['\"])(?P<ep_button_area>.*?)\3\s*,\s*"
-        r"(['\"])(?P<ep_button_area2>.*?)\5\s*,\s*"
-        r"(?P<ep_button_name>[^,)]+)"
-        r"(?:\s*,\s*(?P<is_virtual>true|false))?"
-        r"\s*\)",
-        source,
-        re.IGNORECASE,
-    )
-    if not match:
+    arguments = _extract_ga_event_arguments(source)
+    if len(arguments) < 4:
         return {}
 
-    ep_button_name = match.group("ep_button_name").strip()
-    name_type = "literal"
-    literal_match = re.fullmatch(r"['\"](.*)['\"]", ep_button_name)
-    if literal_match:
-        ep_button_name = literal_match.group(1)
-    else:
-        name_type = "expression"
+    event_name, event_name_type = _js_expression_to_template(arguments[0])
+    ep_button_area, area_type = _js_expression_to_template(arguments[1])
+    ep_button_area2, area2_type = _js_expression_to_template(arguments[2])
+    ep_button_name, name_type = _js_expression_to_template(arguments[3])
+    if not event_name:
+        return {}
 
     return {
-        "event_name": match.group("event_name"),
-        "ep_button_area": match.group("ep_button_area"),
-        "ep_button_area2": match.group("ep_button_area2"),
+        "event_name": event_name,
+        "event_name_type": event_name_type,
+        "ep_button_area": ep_button_area,
+        "ep_button_area_type": area_type,
+        "ep_button_area2": ep_button_area2,
+        "ep_button_area2_type": area2_type,
         "ep_button_name": ep_button_name,
         "ep_button_name_type": name_type,
-        "is_virtual": match.group("is_virtual") == "true",
+        "is_virtual": len(arguments) >= 5 and arguments[4].strip().lower() == "true",
     }
+
+
+def _extract_ga_event_arguments(source: str) -> List[str]:
+    match = re.search(r"GA_Event\s*\(", source, re.IGNORECASE)
+    if not match:
+        return []
+
+    open_index = source.find("(", match.start())
+    if open_index < 0:
+        return []
+
+    depth = 1
+    in_string: Optional[str] = None
+    escape = False
+    index = open_index + 1
+    while index < len(source):
+        char = source[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == in_string:
+                in_string = None
+        elif char in ("'", '"', "`"):
+            in_string = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return _split_top_level(source[open_index + 1:index], ",")
+        index += 1
+    return []
+
+
+def _split_top_level(source: str, delimiter: str) -> List[str]:
+    parts: List[str] = []
+    start = 0
+    depths = {"(": 0, "[": 0, "{": 0}
+    closing = {")": "(", "]": "[", "}": "{"}
+    in_string: Optional[str] = None
+    escape = False
+
+    for index, char in enumerate(source):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == in_string:
+                in_string = None
+            continue
+
+        if char in ("'", '"', "`"):
+            in_string = char
+            continue
+        if char in depths:
+            depths[char] += 1
+            continue
+        if char in closing:
+            opener = closing[char]
+            depths[opener] = max(depths[opener] - 1, 0)
+            continue
+        if char == delimiter and all(depth == 0 for depth in depths.values()):
+            parts.append(source[start:index].strip())
+            start = index + 1
+
+    parts.append(source[start:].strip())
+    return [part for part in parts if part]
+
+
+def _js_expression_to_template(source: str) -> tuple[str, str]:
+    expression = source.strip()
+    literal = _parse_js_string_literal(expression)
+    if literal is not None:
+        return literal, "literal"
+
+    template_literal = _parse_js_template_literal(expression)
+    if template_literal is not None:
+        return template_literal, "expression"
+
+    parts = _split_top_level(expression, "+")
+    if len(parts) <= 1:
+        return _dynamic_placeholder(expression), "expression"
+
+    rendered: List[str] = []
+    for part in parts:
+        part_literal = _parse_js_string_literal(part)
+        if part_literal is not None:
+            rendered.append(part_literal)
+        else:
+            rendered.append(_dynamic_placeholder(part))
+    return "".join(rendered), "expression"
+
+
+def _parse_js_string_literal(source: str) -> Optional[str]:
+    if len(source) < 2 or source[0] not in ("'", '"') or source[-1] != source[0]:
+        return None
+    body = source[1:-1]
+    return re.sub(r"\\(['\"\\])", r"\1", body)
+
+
+def _parse_js_template_literal(source: str) -> Optional[str]:
+    if len(source) < 2 or source[0] != "`" or source[-1] != "`":
+        return None
+
+    body = source[1:-1]
+    return re.sub(
+        r"\$\{([^{}]+)\}",
+        lambda match: _dynamic_placeholder(match.group(1)),
+        body,
+    )
+
+
+def _dynamic_placeholder(source: str) -> str:
+    expression = source.strip()
+    while expression.startswith("(") and expression.endswith(")"):
+        expression = expression[1:-1].strip()
+    identifier = re.fullmatch(r"[A-Za-z_$][\w$]*", expression)
+    if identifier:
+        return f"{{{{{identifier.group(0)}}}}}"
+
+    compact = re.sub(r"\W+", "_", expression, flags=re.UNICODE).strip("_")
+    return f"{{{{{compact[:40] or 'dynamic'}}}}}"

@@ -59,9 +59,14 @@ class HybridTagJudgmentResolver:
             ep_button_area2=ep_button_area2,
             ep_button_name=ep_button_name,
         )
-        return self._search(f"request|{query}", query)
+        return self._search(f"request|{query}", query, event_name=event_name)
 
-    def _search(self, cache_key: str, query: str) -> RagJudgmentEvidence:
+    def _search(
+        self,
+        cache_key: str,
+        query: str,
+        event_name: str = "",
+    ) -> RagJudgmentEvidence:
         cached = self._cache.get(cache_key)
         if cached is not None:
             return cached
@@ -85,7 +90,12 @@ class HybridTagJudgmentResolver:
             return evidence
 
         try:
-            hits = fetch_reference_chunks(self.channel, query, top_k=3)  # type: ignore[arg-type]
+            hits = fetch_reference_chunks(
+                self.channel,
+                query,
+                top_k=3,
+                event_name=event_name or None,
+            )  # type: ignore[arg-type]
             matched_hits = filter_rag_hits_by_score(hits)
         except Exception as exc:
             logger.warning(

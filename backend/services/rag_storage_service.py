@@ -18,6 +18,7 @@ from services.ga4_channel_service import CHANNELS, Ga4Channel, _template_path
 logger = logging.getLogger(__name__)
 
 _BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RAG_INDEX_SCHEMA_VERSION = "2"
 
 CLICK_HANDLER_HEAD = re.compile(
     r"\$\(\s*document\s*\)\.on\s*\(\s*"
@@ -145,6 +146,7 @@ def _manifest_path(persist_dir: str) -> str:
 def _file_fingerprint(path: str) -> str:
     stat = os.stat(path)
     digest = hashlib.sha256()
+    digest.update(RAG_INDEX_SCHEMA_VERSION.encode("utf-8"))
     with open(path, "rb") as file:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(chunk)
@@ -577,13 +579,24 @@ class RagStorageService:
         self,
         query: str,
         channel_id: Optional[str] = None,
+        event_name: Optional[str] = None,
         top_k: int = 5,
     ) -> List[RagSearchResult]:
         normalized_query = query.strip()
         if not normalized_query:
             return []
 
-        where = {"channel_id": channel_id} if channel_id else None
+        filters: List[Dict[str, str]] = []
+        if channel_id:
+            filters.append({"channel_id": channel_id})
+        if event_name:
+            filters.append({"event_name": event_name})
+        if len(filters) > 1:
+            where: Optional[Dict[str, Any]] = {"$and": filters}
+        elif filters:
+            where = filters[0]
+        else:
+            where = None
         result = self._collection.query(
             query_texts=[normalized_query],
             n_results=max(top_k, 1),
@@ -990,10 +1003,12 @@ def print_rag_resolution_diagnostics(resolution: RagReferenceResolution) -> None
 
 def ensure_channel_indexed(channel: Ga4Channel) -> int:
     service = get_rag_storage_service()
+    indexed = service.index_channel(channel, force=False)
+    if indexed > 0:
+        return indexed
     existing = service.count(channel.channel_id)
     if existing > 0:
         return existing
-    indexed = service.index_channel(channel, force=False)
     if indexed == 0:
         indexed = service.index_channel(channel, force=True)
     return indexed
@@ -1003,6 +1018,7 @@ def fetch_reference_chunks(
     channel: Ga4Channel,
     query: str,
     top_k: int = RAG_REFERENCE_TOP_K_CODE,
+    event_name: Optional[str] = None,
 ) -> List[RagSearchResult]:
     normalized_query = query.strip()
     if not normalized_query:
@@ -1011,10 +1027,16 @@ def fetch_reference_chunks(
 
     ensure_channel_indexed(channel)
     service = get_rag_storage_service()
-    hits = service.search(normalized_query, channel_id=channel.channel_id, top_k=top_k)
+    hits = service.search(
+        normalized_query,
+        channel_id=channel.channel_id,
+        event_name=event_name,
+        top_k=top_k,
+    )
     logger.info(
-        "RAG search channel=%s query=%r top_k=%d hits=%d",
+        "RAG search channel=%s event=%s query=%r top_k=%d hits=%d",
         channel.channel_id,
+        event_name or "*",
         normalized_query,
         top_k,
         len(hits),

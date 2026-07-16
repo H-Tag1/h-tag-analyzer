@@ -232,7 +232,20 @@ async def apply_click_tracking_detection(
 
 
 def _build_representative_click_candidates(elements: List[PageElement]) -> List[PageElement]:
-    return [element for element in elements if should_click_for_verification(element)]
+    candidates: List[PageElement] = []
+    seen_request_candidates: set[str] = set()
+    for element in elements:
+        if not should_click_for_verification(element):
+            continue
+        if element.request_rule_ids:
+            candidate_key = element.request_candidate_key or (
+                f"{','.join(sorted(element.request_rule_ids))}|{element.request_dom_index}"
+            )
+            if candidate_key in seen_request_candidates:
+                continue
+            seen_request_candidates.add(candidate_key)
+        candidates.append(element)
+    return candidates
 
 
 def _compute_click_reduction_stats(
@@ -260,7 +273,8 @@ async def _report_progress(progress: Optional[ProgressReporter], event: Dict[str
         await progress(event)
 
 
-def _click_priority(element: PageElement) -> Tuple[int, int, int, int]:
+def _click_priority(element: PageElement) -> Tuple[int, int, int, int, int]:
+    request_rank = 0 if element.request_rule_ids else 1
     needs_click = 0 if not element.click_tracking_events else 1
     if element.element_type == "button":
         type_rank = 0
@@ -269,10 +283,12 @@ def _click_priority(element: PageElement) -> Tuple[int, int, int, int]:
     else:
         type_rank = 2
     static_rank = 0 if element.static_tracking_signals else 1
-    return (needs_click, type_rank, static_rank, element.element_index)
+    return (request_rank, needs_click, type_rank, static_rank, element.element_index)
 
 
 def _should_click_element(element: PageElement) -> bool:
+    if element.request_rule_ids:
+        return True
     text = (element.text or "").strip().lower()
     if any(keyword in text for keyword in DANGEROUS_CLICK_TEXTS):
         return False
@@ -287,7 +303,12 @@ async def _click_initial_element(
     try:
         click_point = await page.evaluate(
             f"""(payload) => {{
-                const els = {ELEMENT_QUERY_JS};
+                const allEls = Array.from(document.querySelectorAll(
+                    'button, a, [onclick], input[type="submit"], input[type="button"]'
+                ));
+                const visibleEls = {ELEMENT_QUERY_JS};
+                const requestMode = payload.requestRuleSelectors.length > 0;
+                const els = requestMode ? allEls : visibleEls;
                 {PERSISTENT_NAVIGATION_CHECK_JS}
                 function buildSelector(el) {{
                     if (el.id) return '#' + CSS.escape(el.id);
@@ -298,9 +319,42 @@ async def _click_initial_element(
                     return el.tagName.toLowerCase();
                 }}
                 function textOf(el) {{
-                    return (el.innerText || el.value || el.title || el.getAttribute('aria-label') || '').trim().slice(0, 120);
+                    const imageAlt = el.querySelector?.('img[alt]')?.getAttribute('alt') || '';
+                    return (
+                        el.innerText ||
+                        el.value ||
+                        el.title ||
+                        el.getAttribute('aria-label') ||
+                        imageAlt ||
+                        ''
+                    ).trim().slice(0, 120);
+                }}
+                function candidateKey(el) {{
+                    const href = el.getAttribute('href') || '';
+                    const imageAlt = el.querySelector?.('img[alt]')?.getAttribute('alt') || '';
+                    const itemText = el.closest('li')?.innerText || '';
+                    return [
+                        [...payload.requestRuleIds].sort().join(','),
+                        href,
+                        textOf(el),
+                        imageAlt,
+                        itemText,
+                    ].join('|').replace(/\s+/g, '').slice(0, 600);
                 }}
                 function matches(el) {{
+                    if (requestMode) {{
+                        const ruleMatches = payload.requestRuleSelectors.some(selector => {{
+                            try {{
+                                return el.matches(selector);
+                            }} catch (_error) {{
+                                return false;
+                            }}
+                        }});
+                        return ruleMatches && (
+                            !payload.requestCandidateKey ||
+                            candidateKey(el) === payload.requestCandidateKey
+                        );
+                    }}
                     return (
                         buildSelector(el) === payload.selector &&
                         el.tagName.toLowerCase() === payload.elementType &&
@@ -308,16 +362,32 @@ async def _click_initial_element(
                     );
                 }}
 
+                const targetIndex = requestMode ? payload.requestDomIndex : payload.index;
                 let el = null;
-                if (payload.index >= 0 && payload.index < els.length && matches(els[payload.index])) {{
-                    el = els[payload.index];
+                if (targetIndex >= 0 && targetIndex < els.length && matches(els[targetIndex])) {{
+                    el = els[targetIndex];
                 }} else {{
-                    el = els.find(matches) || null;
+                    const textMatches = els.filter(candidate => (
+                        matches(candidate) && textOf(candidate) === payload.text
+                    ));
+                    el = textMatches.length === 1 ? textMatches[0] : (els.find(matches) || null);
                 }}
                 if (!el) return null;
                 if (payload.excludePersistentNavigation && isPersistentNavigationElement(el)) return null;
                 el.scrollIntoView({{ block: 'center', inline: 'center' }});
                 const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                const visible = (
+                    rect.width > 0 &&
+                    rect.height > 0 &&
+                    style.display !== 'none' &&
+                    style.visibility !== 'hidden' &&
+                    Number(style.opacity || '1') > 0
+                );
+                if (requestMode && !visible) {{
+                    el.click();
+                    return {{ programmatic: true }};
+                }}
                 const x = rect.left + rect.width / 2;
                 const y = rect.top + rect.height / 2;
                 if (payload.excludePersistentNavigation) {{
@@ -341,10 +411,16 @@ async def _click_initial_element(
                 "text": element.text or "",
                 "elementType": element.element_type,
                 "excludePersistentNavigation": exclude_persistent_navigation,
+                "requestRuleSelectors": element.request_rule_selectors,
+                "requestRuleIds": element.request_rule_ids,
+                "requestCandidateKey": element.request_candidate_key or "",
+                "requestDomIndex": element.request_dom_index,
             },
         )
         if not click_point:
             return False
+        if click_point.get("programmatic"):
+            return True
         await page.mouse.click(click_point["x"], click_point["y"])
         return True
     except Exception as exc:
@@ -532,6 +608,7 @@ def _collect_click_network_events(network_collector, hit_count_before: int) -> L
             continue
         events.append({
             "event_name": event_name,
+            "tid": hit.tid or "",
             **params,
         })
     return events

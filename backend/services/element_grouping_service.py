@@ -168,6 +168,8 @@ async def apply_click_grouping_with_llm(elements: List[PageElement]) -> List[Pag
 
 
 def should_click_for_verification(element: PageElement) -> bool:
+    if element.request_rule_ids:
+        return True
     if not element.click_group_id:
         return True
     return element.click_group_representative
@@ -214,6 +216,8 @@ def propagate_group_click_results(elements: List[PageElement]) -> List[PageEleme
 
         for member in members:
             if member.element_index == representative.element_index:
+                continue
+            if member.request_rule_ids or member.click_tested:
                 continue
 
             member.click_tested = representative.click_tested

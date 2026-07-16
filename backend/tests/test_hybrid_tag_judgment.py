@@ -69,6 +69,24 @@ class HybridTagJudgmentResolverTest(unittest.TestCase):
         self.assertIs(first, second)
         mock_fetch.assert_called_once()
 
+    @patch("services.hybrid_tag_judgment_service.fetch_reference_chunks")
+    @patch("services.hybrid_tag_judgment_service.ensure_channel_indexed", return_value=1)
+    def test_request_search_filters_exact_event_name(self, _mock_index, mock_fetch) -> None:
+        mock_fetch.return_value = [_rag_hit()]
+        resolver = HybridTagJudgmentResolver("https://www.hddfs.com")
+
+        resolver.find_for_request(
+            event_name="click_PC_국문_상품",
+            ep_button_area="상품",
+            ep_button_area2="상세",
+            ep_button_name="구매하기",
+        )
+
+        self.assertEqual(
+            mock_fetch.call_args.kwargs["event_name"],
+            "click_PC_국문_상품",
+        )
+
 
 class ScanClassificationTest(unittest.TestCase):
     @patch("services.tag_classification_service.HybridTagJudgmentResolver")

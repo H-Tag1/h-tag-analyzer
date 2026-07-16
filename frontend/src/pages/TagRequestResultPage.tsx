@@ -1,6 +1,12 @@
 import { useRef, useState } from 'react'
 import { ArrowLeft, AlertCircle, CheckCircle2, ExternalLink, FileSpreadsheet, XCircle } from 'lucide-react'
-import type { BoundingBox, TagRequestSheetResult, TagRequestValidationItem, TagRequestValidationResponse } from '../types'
+import type {
+  BoundingBox,
+  TagRequestCandidateResult,
+  TagRequestSheetResult,
+  TagRequestValidationItem,
+  TagRequestValidationResponse,
+} from '../types'
 import { scrollElementIntoContainerAfterLayout } from '../utils/scrollIntoContainer'
 
 interface Props {
@@ -16,6 +22,8 @@ const PARAM_LABELS: Record<string, string> = {
   ep_button_area2: 'ep_button_area2',
   ep_button_name: 'ep_button_name',
   scan_error: '검사 오류',
+  click_unavailable: '클릭 확인 불가',
+  dom_candidate: '대상 요소 없음',
 }
 
 function hasVisibleBox(box?: BoundingBox | null): box is BoundingBox {
@@ -47,6 +55,12 @@ function statusClasses(item: TagRequestValidationItem) {
   if (item.status === 'review') {
     return 'border-amber-500/20 bg-amber-950/10 text-amber-300'
   }
+  return 'border-red-500/20 bg-red-950/10 text-red-300'
+}
+
+function candidateStatusClasses(status: TagRequestCandidateResult['status']) {
+  if (status === 'normal') return 'border-emerald-500/20 bg-emerald-950/10 text-emerald-300'
+  if (status === 'review') return 'border-amber-500/20 bg-amber-950/10 text-amber-300'
   return 'border-red-500/20 bg-red-950/10 text-red-300'
 }
 
@@ -122,6 +136,26 @@ function ParamComparison({ item }: { item: TagRequestValidationItem }) {
   )
 }
 
+function RequestExamples({ item }: { item: TagRequestValidationItem }) {
+  const examples = Object.entries(item.request.examples ?? {})
+    .filter(([, values]) => values.length > 0)
+  if (!examples.length) return null
+
+  return (
+    <div className="mt-3 rounded-lg border border-[#2A2A2A] bg-[#101010] px-3 py-2 text-xs">
+      <p className="mb-2 text-[11px] text-[#71717A]">문서 예시</p>
+      <dl className="space-y-1.5">
+        {examples.map(([field, values]) => (
+          <div key={field} className="grid grid-cols-[88px_1fr] gap-2">
+            <dt className="truncate text-[#52525B]" title={field}>{field}</dt>
+            <dd className="break-all text-[#D4D4D8]">{values.join(', ')}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  )
+}
+
 function Substitutions({ item }: { item: TagRequestValidationItem }) {
   if (!item.substitutions.length) return null
 
@@ -144,6 +178,101 @@ function Substitutions({ item }: { item: TagRequestValidationItem }) {
   )
 }
 
+function CandidateCoverage({ item }: { item: TagRequestValidationItem }) {
+  if (!item.candidate_count || !item.candidate_results?.length) return null
+
+  return (
+    <div className="mt-3 rounded-lg border border-[#2A2A2A] bg-[#0D0D0D] px-3 py-2">
+      <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+        <span className="text-[#A1A1AA]">후보 {item.tested_count}/{item.candidate_count} 검사</span>
+        <span className="rounded border border-emerald-500/20 px-1.5 py-0.5 text-emerald-300">
+          정상 {item.matched_count}
+        </span>
+        {item.missing_candidate_count > 0 && (
+          <span className="rounded border border-red-500/20 px-1.5 py-0.5 text-red-300">
+            누락 {item.missing_candidate_count}
+          </span>
+        )}
+        {item.review_candidate_count > 0 && (
+          <span className="rounded border border-amber-500/20 px-1.5 py-0.5 text-amber-300">
+            확인 {item.review_candidate_count}
+          </span>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        {item.candidate_results.map((candidate, index) => (
+          <div key={candidate.candidate_key} className="rounded border border-[#242424] bg-[#121212] px-2.5 py-2">
+            <div className="mb-1.5 flex items-center gap-2">
+              <span className={`rounded border px-1.5 py-0.5 text-[10px] ${candidateStatusClasses(candidate.status)}`}>
+                {candidate.status === 'normal' ? '정상' : candidate.status === 'review' ? '확인 필요' : '누락'}
+              </span>
+              <span className="truncate text-[11px] text-[#A1A1AA]" title={candidate.element_text}>
+                {candidate.element_text || `후보 ${index + 1}`}
+              </span>
+            </div>
+            {candidate.matched_tag ? (
+              <dl className="space-y-1 text-[11px]">
+                {[
+                  ['area', candidate.matched_tag.ep_button_area],
+                  ['area2', candidate.matched_tag.ep_button_area2],
+                  ['name', candidate.matched_tag.ep_button_name],
+                ].map(([label, value]) => (
+                  <div key={label} className="grid grid-cols-[36px_1fr] gap-2">
+                    <dt className="text-[#52525B]">{label}</dt>
+                    <dd className="break-all text-[#D4D4D8]">{value || '-'}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              <p className="text-[11px] leading-4 text-[#71717A]">{candidate.reason}</p>
+            )}
+            {candidate.missing_fields.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {candidate.missing_fields.map(field => (
+                  <span key={field} className="text-[10px] text-red-300">
+                    {PARAM_LABELS[field] ?? field}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+interface ItemOverlay {
+  key: string
+  box: BoundingBox
+  status: TagRequestCandidateResult['status']
+  label: string
+}
+
+function itemOverlays(item: TagRequestValidationItem): ItemOverlay[] {
+  const candidateOverlays = (item.candidate_results ?? [])
+    .flatMap((candidate, index) => (
+      hasVisibleBox(candidate.bounding_box)
+        ? [{
+            key: `${keyOf(item)}-candidate-${index}`,
+            box: candidate.bounding_box,
+            status: candidate.status,
+            label: candidate.element_text || itemTitle(item),
+          }]
+        : []
+    ))
+
+  if (candidateOverlays.length) return candidateOverlays
+  if (!hasVisibleBox(item.bounding_box)) return []
+  return [{
+    key: `${keyOf(item)}-request`,
+    box: item.bounding_box,
+    status: item.status,
+    label: itemTitle(item),
+  }]
+}
+
 export default function TagRequestResultPage({ result, onBack }: Props) {
   const [sheetIdx, setSheetIdx] = useState(0)
   const [panelTab, setPanelTab] = useState<PanelTab>(() => defaultPanelTab(result.sheets[0]))
@@ -153,6 +282,9 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
 
   const current = result.sheets[sheetIdx] ?? null
   const visibleItems = current ? filteredItems(current, panelTab) : []
+  const visibleOverlays = visibleItems.flatMap(item => (
+    itemOverlays(item).map(overlay => ({ item, ...overlay }))
+  ))
   const captureSegments = current ? screenshotSegments(current) : []
 
   if (!current) {
@@ -298,27 +430,28 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
                     ))}
                   </div>
                   <div className="absolute inset-0 pointer-events-none">
-                    {visibleItems.map(item => {
-                      if (!hasVisibleBox(item.bounding_box)) return null
-                      const key = keyOf(item)
-                      const isSelected = selectedItemKey === key
-                      const isNormal = item.status === 'normal'
-                      const isReview = item.status === 'review'
+                    {visibleOverlays.map(overlay => {
+                      const itemKey = keyOf(overlay.item)
+                      const isSelected = selectedItemKey === itemKey
+                      const isNormal = overlay.status === 'normal'
+                      const isReview = overlay.status === 'review'
                       return (
                         <div
-                          key={key}
+                          key={overlay.key}
                           ref={node => {
-                            overlayRefs.current[key] = node
+                            if (node) {
+                              overlayRefs.current[itemKey] = node
+                            }
                           }}
                           onClick={event => {
                             event.stopPropagation()
-                            handleSelectItem(item)
+                            handleSelectItem(overlay.item)
                           }}
-                          title={itemTitle(item)}
+                          title={overlay.label}
                           style={{
                             position: 'absolute',
                             pointerEvents: 'auto',
-                            ...boxToStyle(item.bounding_box, current.screenshot_width, current.screenshot_height),
+                            ...boxToStyle(overlay.box, current.screenshot_width, current.screenshot_height),
                           }}
                           className={`cursor-pointer rounded transition-all ${
                             isNormal
@@ -337,7 +470,7 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
                           <span className={`absolute -top-5 left-0 text-[10px] bg-[#1A1A1A]/90 px-1 rounded whitespace-nowrap max-w-[180px] truncate pointer-events-none ${
                             isNormal ? 'text-emerald-400' : isReview ? 'text-amber-400' : 'text-red-400'
                           }`}>
-                            {item.request.request_no}. {itemTitle(item)}
+                            {overlay.item.request.request_no}. {overlay.label}
                           </span>
                         </div>
                       )
@@ -426,6 +559,8 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
                       <p className="mt-2 text-xs leading-5 text-[#71717A]">{item.judgment_reason}</p>
                     )}
                     <ParamComparison item={item} />
+                    <RequestExamples item={item} />
+                    <CandidateCoverage item={item} />
                     <Substitutions item={item} />
                     <MissingFields fields={item.missing_fields} />
                   </button>

@@ -20,3 +20,7 @@ class PageElement(BaseModel):
     click_group_id: Optional[str] = None
     click_group_representative: bool = True
     click_group_size: int = 1
+    request_rule_ids: List[str] = Field(default_factory=list)
+    request_rule_selectors: List[str] = Field(default_factory=list)
+    request_candidate_key: Optional[str] = None
+    request_dom_index: int = -1

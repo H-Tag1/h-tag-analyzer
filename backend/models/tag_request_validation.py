@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,7 @@ class TagRequestItem(BaseModel):
     ep_button_area: str = ""
     ep_button_area2: str = ""
     ep_button_name: str = ""
+    examples: Dict[str, List[str]] = Field(default_factory=dict)
 
 
 class TagRequestMatch(BaseModel):
@@ -30,6 +31,19 @@ class TagRequestSubstitution(BaseModel):
     value: str
 
 
+class TagRequestCandidateResult(BaseModel):
+    candidate_key: str
+    element_selector: str = ""
+    element_text: str = ""
+    status: str
+    click_tested: bool = False
+    bounding_box: Optional[BoundingBox] = None
+    missing_fields: List[str] = Field(default_factory=list)
+    substitutions: List[TagRequestSubstitution] = Field(default_factory=list)
+    matched_tag: Optional[TagRequestMatch] = None
+    reason: str = ""
+
+
 class TagRequestValidationItem(BaseModel):
     request: TagRequestItem
     status: str
@@ -41,6 +55,12 @@ class TagRequestValidationItem(BaseModel):
     judgment_reason: str = ""
     rag_score: Optional[float] = None
     matched_tag: Optional[TagRequestMatch] = None
+    candidate_count: int = 0
+    tested_count: int = 0
+    matched_count: int = 0
+    missing_candidate_count: int = 0
+    review_candidate_count: int = 0
+    candidate_results: List[TagRequestCandidateResult] = Field(default_factory=list)
 
 
 class TagRequestSheetResult(BaseModel):
