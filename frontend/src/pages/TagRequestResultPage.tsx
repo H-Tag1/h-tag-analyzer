@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { ArrowLeft, AlertCircle, CheckCircle2, ExternalLink, FileSpreadsheet, XCircle } from 'lucide-react'
+import { ArrowLeft, AlertCircle, CheckCircle2, ChevronDown, ExternalLink, FileSpreadsheet, XCircle } from 'lucide-react'
 import type {
   BoundingBox,
   TagRequestCandidateResult,
@@ -277,6 +277,7 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
   const [sheetIdx, setSheetIdx] = useState(0)
   const [panelTab, setPanelTab] = useState<PanelTab>(() => defaultPanelTab(result.sheets[0]))
   const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null)
+  const [expandedItemKeys, setExpandedItemKeys] = useState<Set<string>>(() => new Set())
   const captureScrollRef = useRef<HTMLDivElement>(null)
   const overlayRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
@@ -308,6 +309,7 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
     setSheetIdx(idx)
     setPanelTab(defaultPanelTab(result.sheets[idx]))
     setSelectedItemKey(null)
+    setExpandedItemKeys(new Set())
   }
 
   const handleSelectItem = (item: TagRequestValidationItem) => {
@@ -321,6 +323,30 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
       }
       return next
     })
+  }
+
+  const handleToggleItem = (item: TagRequestValidationItem) => {
+    const key = keyOf(item)
+    const willExpand = !expandedItemKeys.has(key)
+
+    setExpandedItemKeys(previous => {
+      const next = new Set(previous)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+
+    if (willExpand) {
+      setSelectedItemKey(key)
+      window.requestAnimationFrame(() => {
+        scrollElementIntoContainerAfterLayout(overlayRefs.current[key] ?? null, captureScrollRef.current)
+      })
+    } else {
+      setSelectedItemKey(previous => previous === key ? null : previous)
+    }
   }
 
   return (
@@ -499,6 +525,7 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
                 onClick={() => {
                   setPanelTab(tab)
                   setSelectedItemKey(null)
+                  setExpandedItemKeys(new Set())
                 }}
                 className={`flex-1 px-1 py-2.5 text-[11px] font-medium transition-colors ${
                   panelTab === tab
@@ -521,49 +548,73 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
               visibleItems.map(item => {
                 const key = keyOf(item)
                 const isSelected = selectedItemKey === key
+                const isExpanded = expandedItemKeys.has(key)
+                const detailId = `request-details-${sheetIdx}-${item.request.row_number}`
                 return (
-                  <button
+                  <article
                     key={key}
-                    type="button"
-                    onClick={() => handleSelectItem(item)}
-                    className={`w-full border-b border-[#2A2A2A] px-4 py-3 text-left transition-colors ${
-                      isSelected ? 'bg-white/[0.04]' : 'hover:bg-white/[0.02]'
+                    className={`w-full border-b border-[#2A2A2A] transition-colors ${
+                      isSelected ? 'bg-white/[0.04]' : ''
                     }`}
                   >
-                    <div className="mb-2 flex items-center gap-2">
-                      <span className={`inline-flex items-center gap-1.5 rounded border px-2 py-1 text-xs ${statusClasses(item)}`}>
-                        {item.status === 'normal'
-                          ? <CheckCircle2 size={13} />
-                          : item.status === 'review'
-                            ? <AlertCircle size={13} />
-                            : <XCircle size={13} />
-                        }
-                        {statusLabel(item)}
-                      </span>
-                      <span className="text-xs text-[#71717A]">요청 {item.request.request_no}</span>
-                      {item.match_source === 'ai' && (
-                        <span className="rounded border border-purple-500/30 bg-purple-950/30 px-1.5 py-0.5 text-[10px] text-purple-200">
-                          AI 위치
+                    <button
+                      type="button"
+                      onClick={() => handleToggleItem(item)}
+                      aria-expanded={isExpanded}
+                      aria-controls={detailId}
+                      className="w-full px-4 py-3 text-left transition-colors hover:bg-white/[0.02]"
+                    >
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className={`inline-flex items-center gap-1.5 rounded border px-2 py-1 text-xs ${statusClasses(item)}`}>
+                          {item.status === 'normal'
+                            ? <CheckCircle2 size={13} />
+                            : item.status === 'review'
+                              ? <AlertCircle size={13} />
+                              : <XCircle size={13} />
+                          }
+                          {statusLabel(item)}
                         </span>
-                      )}
-                      {item.judgment_source === 'rag' && (
-                        <span className="rounded border border-amber-500/30 bg-amber-950/20 px-1.5 py-0.5 text-[10px] text-amber-200">
-                          RAG{typeof item.rag_score === 'number' ? ` ${item.rag_score.toFixed(2)}` : ''}
+                        <span className="text-xs text-[#71717A]">요청 {item.request.request_no}</span>
+                        {item.match_source === 'ai' && (
+                          <span className="rounded border border-purple-500/30 bg-purple-950/30 px-1.5 py-0.5 text-[10px] text-purple-200">
+                            AI 위치
+                          </span>
+                        )}
+                        {item.judgment_source === 'rag' && (
+                          <span className="rounded border border-amber-500/30 bg-amber-950/20 px-1.5 py-0.5 text-[10px] text-amber-200">
+                            RAG{typeof item.rag_score === 'number' ? ` ${item.rag_score.toFixed(2)}` : ''}
+                          </span>
+                        )}
+                        <span className="ml-auto flex shrink-0 items-center gap-2">
+                          {!item.bounding_box && <span className="text-[10px] text-[#52525B]">화면 위치 없음</span>}
+                          <ChevronDown
+                            size={16}
+                            aria-hidden="true"
+                            className={`text-[#71717A] transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                          />
                         </span>
-                      )}
-                      {!item.bounding_box && <span className="ml-auto text-[10px] text-[#52525B]">화면 위치 없음</span>}
-                    </div>
-                    <p className="truncate text-sm font-medium text-white">{itemTitle(item)}</p>
-                    <p className="mt-1 truncate font-mono text-xs text-[#71717A]">{item.request.event_name}</p>
-                    {item.judgment_reason && (
-                      <p className="mt-2 text-xs leading-5 text-[#71717A]">{item.judgment_reason}</p>
+                      </div>
+                      <p className={`${isExpanded ? 'break-words' : 'truncate'} text-sm font-medium text-white`}>
+                        {itemTitle(item)}
+                      </p>
+                      <p className={`mt-1 font-mono text-xs text-[#71717A] ${isExpanded ? 'break-all' : 'truncate'}`}>
+                        {item.request.event_name}
+                      </p>
+                    </button>
+
+                    {isExpanded && (
+                      <div id={detailId} className="px-4 pb-4">
+                        {item.judgment_reason && (
+                          <p className="text-xs leading-5 text-[#71717A]">{item.judgment_reason}</p>
+                        )}
+                        <ParamComparison item={item} />
+                        <RequestExamples item={item} />
+                        <CandidateCoverage item={item} />
+                        <Substitutions item={item} />
+                        <MissingFields fields={item.missing_fields} />
+                      </div>
                     )}
-                    <ParamComparison item={item} />
-                    <RequestExamples item={item} />
-                    <CandidateCoverage item={item} />
-                    <Substitutions item={item} />
-                    <MissingFields fields={item.missing_fields} />
-                  </button>
+                  </article>
                 )
               })
             )}
