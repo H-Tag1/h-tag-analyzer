@@ -23,6 +23,7 @@ from models.tag_request_validation import (
 )
 from config import settings
 from services.page_scan_service import collect_page_data_with_clean_capture
+from services.hybrid_tag_judgment_service import HybridTagJudgmentResolver
 from services.tag_request_excel_service import ParsedTagRequestSheet, parse_tag_request_workbook
 from services.tracking.event_normalizer import EP_FIELDS, event_name_from_dict, extract_ep_params, params_from_event_dict
 from services.tracking_filter_service import filter_network_tags, normalize_tracking_id
@@ -73,6 +74,7 @@ async def validate_tag_request_workbook(
             **context,
             "normalCount": result.normal_count,
             "missingCount": result.missing_count,
+            "reviewCount": result.review_count,
             "hasError": bool(result.error),
         })
 
@@ -81,6 +83,7 @@ async def validate_tag_request_workbook(
         total_count=sum(result.total_count for result in results),
         normal_count=sum(result.normal_count for result in results),
         missing_count=sum(result.missing_count for result in results),
+        review_count=sum(result.review_count for result in results),
         sheets=results,
     )
     await _report_progress(progress, {
@@ -129,10 +132,21 @@ async def _validate_sheet(
         "type": "matching_start",
         "itemTotal": len(sheet.items),
     })
-    items = [
-        _validate_request_item(item, network_tags, tracking_elements, capture_elements)
-        for item in sheet.items
-    ]
+    rag_resolver = HybridTagJudgmentResolver(sheet.url)
+    items: List[TagRequestValidationItem] = []
+    for item_index, item in enumerate(sheet.items, start=1):
+        items.append(_validate_request_item(
+            item,
+            network_tags,
+            tracking_elements,
+            capture_elements,
+            rag_resolver,
+        ))
+        await _report_progress(progress, {
+            "type": "matching_progress",
+            "current": item_index,
+            "total": len(sheet.items),
+        })
     await _apply_ai_bounding_box_fallback(
         items,
         capture_elements,
@@ -146,7 +160,8 @@ async def _validate_sheet(
         "itemTotal": len(items),
     })
     normal_count = sum(1 for item in items if item.status == "normal")
-    missing_count = len(items) - normal_count
+    missing_count = sum(1 for item in items if item.status == "missing")
+    review_count = sum(1 for item in items if item.status == "review")
 
     return TagRequestSheetResult(
         sheet_name=sheet.sheet_name,
@@ -160,6 +175,7 @@ async def _validate_sheet(
         total_count=len(items),
         normal_count=normal_count,
         missing_count=missing_count,
+        review_count=review_count,
         items=items,
     )
 
@@ -168,8 +184,10 @@ def _sheet_error(sheet: ParsedTagRequestSheet, message: str) -> TagRequestSheetR
     items = [
         TagRequestValidationItem(
             request=item,
-            status="missing",
+            status="review",
             missing_fields=["scan_error"],
+            judgment_source="rule",
+            judgment_reason=message,
         )
         for item in sheet.items
     ]
@@ -179,7 +197,8 @@ def _sheet_error(sheet: ParsedTagRequestSheet, message: str) -> TagRequestSheetR
         event_name=sheet.event_name,
         total_count=len(items),
         normal_count=0,
-        missing_count=len(items),
+        missing_count=0,
+        review_count=len(items),
         error=message,
         items=items,
     )
@@ -190,6 +209,7 @@ def _validate_request_item(
     network_tags: List[NetworkTagHit],
     tracking_elements: List[PageElement],
     capture_elements: List[PageElement],
+    rag_resolver: HybridTagJudgmentResolver,
 ) -> TagRequestValidationItem:
     best_mismatch: Optional[Dict[str, str]] = None
     best_actual_params: Optional[Dict[str, str]] = None
@@ -213,6 +233,8 @@ def _validate_request_item(
                 status="normal",
                 bounding_box=bounding_box,
                 substitutions=_extract_substitutions(request, actual_params),
+                judgment_source="rule",
+                judgment_reason="실제 GA 이벤트가 요청 명세와 일치합니다.",
                 matched_tag=TagRequestMatch(
                     event_name=event_name,
                     ep_button_area=actual_params["ep_button_area"],
@@ -227,25 +249,54 @@ def _validate_request_item(
             best_actual_params = actual_params
             best_trigger = hit.trigger
 
-    missing_fields = list(best_mismatch.keys()) if best_mismatch else ["event_name", *EP_FIELDS]
     bounding_box = _find_capture_bounding_box(
         request,
         tracking_elements,
         capture_elements,
     )
+
+    if best_mismatch is not None:
+        return TagRequestValidationItem(
+            request=request,
+            status="missing",
+            missing_fields=list(best_mismatch.keys()),
+            bounding_box=bounding_box,
+            substitutions=_extract_substitutions(request, best_actual_params or {}),
+            judgment_source="rule",
+            judgment_reason="실제 이벤트가 발생했지만 요청 명세와 일치하지 않습니다.",
+            matched_tag=TagRequestMatch(
+                event_name=request.event_name,
+                ep_button_area=(best_actual_params or {}).get("ep_button_area", ""),
+                ep_button_area2=(best_actual_params or {}).get("ep_button_area2", ""),
+                ep_button_name=(best_actual_params or {}).get("ep_button_name", ""),
+                trigger=best_trigger,
+            ),
+        )
+
+    evidence = rag_resolver.find_for_request(
+        event_name=request.event_name,
+        ep_button_area=request.ep_button_area,
+        ep_button_area2=request.ep_button_area2,
+        ep_button_name=request.ep_button_name,
+    )
+    should_review = evidence.available and not evidence.matched
+
     return TagRequestValidationItem(
         request=request,
-        status="missing",
-        missing_fields=missing_fields,
+        status="review" if should_review else "missing",
+        missing_fields=[] if should_review else ["event_name", *EP_FIELDS],
         bounding_box=bounding_box,
-        substitutions=_extract_substitutions(request, best_actual_params or {}),
-        matched_tag=TagRequestMatch(
-            event_name=request.event_name,
-            ep_button_area=(best_actual_params or {}).get("ep_button_area", ""),
-            ep_button_area2=(best_actual_params or {}).get("ep_button_area2", ""),
-            ep_button_name=(best_actual_params or {}).get("ep_button_name", ""),
-            trigger=best_trigger,
-        ) if best_actual_params else None,
+        substitutions=[],
+        judgment_source="rag" if evidence.available else "rule",
+        judgment_reason=(
+            "실제 이벤트가 없고 유사한 ga4Common 근거도 부족해 확인이 필요합니다."
+            if should_review
+            else "유사한 ga4Common 태깅 사례는 있으나 실제 이벤트가 발생하지 않았습니다."
+            if evidence.matched
+            else "RAG 데이터를 사용할 수 없어 기존 기준으로 누락 처리했습니다."
+        ),
+        rag_score=evidence.score,
+        matched_tag=None,
     )
 
 

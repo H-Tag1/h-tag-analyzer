@@ -8,7 +8,7 @@ interface Props {
   onBack: () => void
 }
 
-type PanelTab = 'all' | 'missing' | 'normal'
+type PanelTab = 'all' | 'missing' | 'review' | 'normal'
 
 const PARAM_LABELS: Record<string, string> = {
   event_name: '이벤트명',
@@ -35,13 +35,19 @@ function boxToStyle(box: BoundingBox, imageWidth: number, imageHeight: number) {
 }
 
 function statusLabel(item: TagRequestValidationItem) {
-  return item.status === 'normal' ? '정상' : '누락'
+  if (item.status === 'normal') return '정상'
+  if (item.status === 'review') return '확인 필요'
+  return '누락'
 }
 
 function statusClasses(item: TagRequestValidationItem) {
-  return item.status === 'normal'
-    ? 'border-emerald-500/20 bg-emerald-950/10 text-emerald-300'
-    : 'border-red-500/20 bg-red-950/10 text-red-300'
+  if (item.status === 'normal') {
+    return 'border-emerald-500/20 bg-emerald-950/10 text-emerald-300'
+  }
+  if (item.status === 'review') {
+    return 'border-amber-500/20 bg-amber-950/10 text-amber-300'
+  }
+  return 'border-red-500/20 bg-red-950/10 text-red-300'
 }
 
 function itemTitle(item: TagRequestValidationItem) {
@@ -50,8 +56,16 @@ function itemTitle(item: TagRequestValidationItem) {
 
 function filteredItems(sheet: TagRequestSheetResult, tab: PanelTab) {
   if (tab === 'missing') return sheet.items.filter(item => item.status === 'missing')
+  if (tab === 'review') return sheet.items.filter(item => item.status === 'review')
   if (tab === 'normal') return sheet.items.filter(item => item.status === 'normal')
   return sheet.items
+}
+
+function defaultPanelTab(sheet?: TagRequestSheetResult | null): PanelTab {
+  if (!sheet) return 'missing'
+  if (sheet.missing_count > 0) return 'missing'
+  if ((sheet.review_count ?? 0) > 0) return 'review'
+  return 'normal'
 }
 
 function screenshotSegments(sheet: TagRequestSheetResult) {
@@ -132,7 +146,7 @@ function Substitutions({ item }: { item: TagRequestValidationItem }) {
 
 export default function TagRequestResultPage({ result, onBack }: Props) {
   const [sheetIdx, setSheetIdx] = useState(0)
-  const [panelTab, setPanelTab] = useState<PanelTab>('missing')
+  const [panelTab, setPanelTab] = useState<PanelTab>(() => defaultPanelTab(result.sheets[0]))
   const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null)
   const captureScrollRef = useRef<HTMLDivElement>(null)
   const overlayRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -160,7 +174,7 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
 
   const handleSheetChange = (idx: number) => {
     setSheetIdx(idx)
-    setPanelTab('missing')
+    setPanelTab(defaultPanelTab(result.sheets[idx]))
     setSelectedItemKey(null)
   }
 
@@ -208,6 +222,7 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
           <span className="text-blue-400 font-medium">전체 {result.total_count}건</span>
           <span className="text-emerald-400 font-medium">정상 {result.normal_count}건</span>
           <span className="text-red-400 font-medium">누락 {result.missing_count}건</span>
+          <span className="text-amber-400 font-medium">확인 {result.review_count ?? 0}건</span>
         </div>
       </header>
 
@@ -229,6 +244,7 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
               </span>
               {sheet.normal_count > 0 && <span className="ml-1 text-emerald-400">({sheet.normal_count})</span>}
               {sheet.missing_count > 0 && <span className="ml-1 text-red-400">({sheet.missing_count})</span>}
+              {(sheet.review_count ?? 0) > 0 && <span className="ml-1 text-amber-400">({sheet.review_count})</span>}
             </button>
           ))}
         </div>
@@ -247,6 +263,10 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
                 <span className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded border border-red-500/60 bg-red-500/15" />
                   누락 {current.missing_count}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded border border-amber-500/60 bg-amber-500/15" />
+                  확인 필요 {current.review_count ?? 0}
                 </span>
               </div>
             </div>
@@ -278,11 +298,12 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
                     ))}
                   </div>
                   <div className="absolute inset-0 pointer-events-none">
-                    {current.items.map(item => {
+                    {visibleItems.map(item => {
                       if (!hasVisibleBox(item.bounding_box)) return null
                       const key = keyOf(item)
                       const isSelected = selectedItemKey === key
                       const isNormal = item.status === 'normal'
+                      const isReview = item.status === 'review'
                       return (
                         <div
                           key={key}
@@ -304,13 +325,17 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
                               ? isSelected
                                 ? 'bg-emerald-500/30 border-2 border-emerald-400 shadow-lg shadow-emerald-900/40 z-20'
                                 : 'bg-emerald-500/15 border border-emerald-500/60 hover:bg-emerald-500/25 z-10'
+                              : isReview
+                                ? isSelected
+                                  ? 'bg-amber-500/30 border-2 border-amber-400 shadow-lg shadow-amber-900/40 z-20'
+                                  : 'bg-amber-500/15 border border-amber-500/60 hover:bg-amber-500/25 z-10'
                               : isSelected
                                 ? 'bg-red-500/30 border-2 border-red-400 shadow-lg shadow-red-900/40 z-20'
                                 : 'bg-red-500/15 border border-red-500/60 hover:bg-red-500/25 z-10'
                           }`}
                         >
                           <span className={`absolute -top-5 left-0 text-[10px] bg-[#1A1A1A]/90 px-1 rounded whitespace-nowrap max-w-[180px] truncate pointer-events-none ${
-                            isNormal ? 'text-emerald-400' : 'text-red-400'
+                            isNormal ? 'text-emerald-400' : isReview ? 'text-amber-400' : 'text-red-400'
                           }`}>
                             {item.request.request_no}. {itemTitle(item)}
                           </span>
@@ -333,6 +358,7 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
             {([
               ['all', `전체 (${current.total_count})`, 'border-blue-400'],
               ['missing', `누락 (${current.missing_count})`, 'border-red-400'],
+              ['review', `확인 (${current.review_count ?? 0})`, 'border-amber-400'],
               ['normal', `정상 (${current.normal_count})`, 'border-emerald-400'],
             ] as const).map(([tab, label, border]) => (
               <button
@@ -341,7 +367,7 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
                   setPanelTab(tab)
                   setSelectedItemKey(null)
                 }}
-                className={`flex-1 px-3 py-2.5 text-xs font-medium transition-colors ${
+                className={`flex-1 px-1 py-2.5 text-[11px] font-medium transition-colors ${
                   panelTab === tab
                     ? `text-white border-b-2 ${border}`
                     : 'text-[#52525B] hover:text-[#A1A1AA]'
@@ -373,7 +399,12 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
                   >
                     <div className="mb-2 flex items-center gap-2">
                       <span className={`inline-flex items-center gap-1.5 rounded border px-2 py-1 text-xs ${statusClasses(item)}`}>
-                        {item.status === 'normal' ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+                        {item.status === 'normal'
+                          ? <CheckCircle2 size={13} />
+                          : item.status === 'review'
+                            ? <AlertCircle size={13} />
+                            : <XCircle size={13} />
+                        }
                         {statusLabel(item)}
                       </span>
                       <span className="text-xs text-[#71717A]">요청 {item.request.request_no}</span>
@@ -382,10 +413,18 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
                           AI 위치
                         </span>
                       )}
+                      {item.judgment_source === 'rag' && (
+                        <span className="rounded border border-amber-500/30 bg-amber-950/20 px-1.5 py-0.5 text-[10px] text-amber-200">
+                          RAG{typeof item.rag_score === 'number' ? ` ${item.rag_score.toFixed(2)}` : ''}
+                        </span>
+                      )}
                       {!item.bounding_box && <span className="ml-auto text-[10px] text-[#52525B]">화면 위치 없음</span>}
                     </div>
                     <p className="truncate text-sm font-medium text-white">{itemTitle(item)}</p>
                     <p className="mt-1 truncate font-mono text-xs text-[#71717A]">{item.request.event_name}</p>
+                    {item.judgment_reason && (
+                      <p className="mt-2 text-xs leading-5 text-[#71717A]">{item.judgment_reason}</p>
+                    )}
                     <ParamComparison item={item} />
                     <Substitutions item={item} />
                     <MissingFields fields={item.missing_fields} />

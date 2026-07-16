@@ -223,7 +223,11 @@ def _assemble_page_data(
     network_tags: list,
     tracking_id: str,
 ) -> PageScanData:
-    tracked_items, issues = classify_network_tags(network_tags, elements)
+    tracked_items, issues, review_items = classify_network_tags(
+        network_tags,
+        elements,
+        page_url=url,
+    )
     issues = filter_dismissed_issues(issues, url)
     channel = resolve_channel_or_none(url)
 
@@ -238,6 +242,7 @@ def _assemble_page_data(
         channel_label=channel.label if channel else None,
         datalayer_events=datalayer,
         issues=issues,
+        review_items=review_items,
         tracked_items=tracked_items,
         network_tags=network_tags,
     )

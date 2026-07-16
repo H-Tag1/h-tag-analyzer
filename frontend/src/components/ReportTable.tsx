@@ -26,7 +26,24 @@ export default function ReportTable({ onOpenDetail }: Props) {
   }
 
   useEffect(() => {
-    void loadRecords()
+    let cancelled = false
+
+    void fetchScanHistoryList()
+      .then(data => {
+        if (!cancelled) setRecords(data)
+      })
+      .catch(caughtError => {
+        if (!cancelled) {
+          setError(caughtError instanceof Error ? caughtError.message : '리포트를 불러오지 못했습니다.')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const handleDelete = async (id: string, event: React.MouseEvent) => {
@@ -115,6 +132,12 @@ export default function ReportTable({ onOpenDetail }: Props) {
                         <span className="text-emerald-400">검증 {record.tracked_count}</span>
                         <span className="mx-1.5 text-[#52525B]">/</span>
                         <span className="text-red-400">누락 {record.issue_count}</span>
+                        {(record.review_count ?? 0) > 0 && (
+                          <>
+                            <span className="mx-1.5 text-[#52525B]">/</span>
+                            <span className="text-amber-400">확인 {record.review_count}</span>
+                          </>
+                        )}
                       </td>
                       <td className="px-4 py-3 align-middle">
                         <div className="flex items-center justify-center gap-1">

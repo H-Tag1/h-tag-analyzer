@@ -61,19 +61,14 @@ export default function IssuePanel({
   }, [selectedIndex])
 
   useEffect(() => {
-    setGeneratedCode(initialGeneratedCode)
-  }, [initialGeneratedCode, pageUrl])
-
-  useEffect(() => {
     if (!pageUrl || issues.length === 0) {
-      setSuggestedTags({})
       return
     }
 
     let cancelled = false
-    setIsSuggesting(true)
 
     void (async () => {
+      setIsSuggesting(true)
       try {
         const res = await fetch('/api/suggest-tag-specs', {
           method: 'POST',

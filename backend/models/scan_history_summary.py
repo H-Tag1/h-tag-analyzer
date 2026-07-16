@@ -9,6 +9,7 @@ class ScanHistorySummary(BaseModel):
     tracking_id: str
     page_count: int
     issue_count: int
+    review_count: int = 0
     tracked_count: int
     has_generated_code: bool
     created_at: str

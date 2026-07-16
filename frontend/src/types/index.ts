@@ -11,6 +11,8 @@ export interface AiAnalysisItem {
   bounding_box: BoundingBox
   issue: string
   recommended_ga_spec: Record<string, unknown>
+  judgment_source?: string
+  rag_score?: number | null
 }
 
 export interface TrackedAnalysisItem {
@@ -47,6 +49,7 @@ export interface PageScanData {
   channel_label?: string | null
   datalayer_events: Record<string, unknown>[]
   issues: AiAnalysisItem[]
+  review_items?: AiAnalysisItem[]
   tracked_items: TrackedAnalysisItem[]
   network_tags?: NetworkTagHit[]
 }
@@ -113,11 +116,14 @@ export interface TagRequestSubstitution {
 
 export interface TagRequestValidationItem {
   request: TagRequestItem
-  status: 'normal' | 'missing'
+  status: 'normal' | 'missing' | 'review'
   missing_fields: string[]
   bounding_box?: BoundingBox | null
   substitutions: TagRequestSubstitution[]
   match_source: 'rule' | 'ai' | string
+  judgment_source: 'rule' | 'rag' | string
+  judgment_reason: string
+  rag_score?: number | null
   matched_tag?: TagRequestMatch | null
 }
 
@@ -140,6 +146,7 @@ export interface TagRequestSheetResult {
   total_count: number
   normal_count: number
   missing_count: number
+  review_count: number
   error?: string | null
   items: TagRequestValidationItem[]
 }
@@ -149,6 +156,7 @@ export interface TagRequestValidationResponse {
   total_count: number
   normal_count: number
   missing_count: number
+  review_count: number
   sheets: TagRequestSheetResult[]
 }
 
@@ -170,6 +178,7 @@ export type TagRequestValidationEvent =
   | ({ type: 'capture_start' } & TagRequestProgressContext)
   | ({ type: 'capture_done'; segmentCount: number } & TagRequestProgressContext)
   | ({ type: 'matching_start'; itemTotal: number } & TagRequestProgressContext)
+  | ({ type: 'matching_progress'; current: number; total: number } & TagRequestProgressContext)
   | ({ type: 'ai_matching_start'; itemTotal: number } & TagRequestProgressContext)
   | ({ type: 'ai_matching_done'; matchedCount: number } & TagRequestProgressContext)
   | ({ type: 'matching_done'; itemTotal: number } & TagRequestProgressContext)
@@ -177,6 +186,7 @@ export type TagRequestValidationEvent =
       type: 'sheet_complete'
       normalCount: number
       missingCount: number
+      reviewCount: number
       hasError: boolean
     } & TagRequestProgressContext)
   | { type: 'validation_complete'; data: TagRequestValidationResponse }
@@ -190,6 +200,7 @@ export interface ScanHistorySummary {
   tracking_id: string
   page_count: number
   issue_count: number
+  review_count?: number
   tracked_count: number
   has_generated_code: boolean
   created_at: string

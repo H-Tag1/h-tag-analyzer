@@ -21,6 +21,11 @@ from services.tracking.event_normalizer import (
     prefer_click_events,
 )
 from services.element_grouping_service import expand_grouped_overlay_results
+from services.hybrid_tag_judgment_service import (
+    HybridTagJudgmentResolver,
+    RagJudgmentEvidence,
+    recommended_spec_from_evidence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +40,14 @@ EMPTY_BOUNDING_BOX = BoundingBox(x=0, y=0, width=0, height=0)
 def classify_network_tags(
     hits: List[NetworkTagHit],
     elements: Optional[List[PageElement]] = None,
-) -> Tuple[List[TrackedAnalysisItem], List[AiAnalysisItem]]:
+    page_url: Optional[str] = None,
+) -> Tuple[List[TrackedAnalysisItem], List[AiAnalysisItem], List[AiAnalysisItem]]:
     tracked_items: List[TrackedAnalysisItem] = []
     issues: List[AiAnalysisItem] = []
+    review_items: List[AiAnalysisItem] = []
     seen_keys: set[str] = set()
     classified_element_keys: set[str] = set()
+    rag_resolver = HybridTagJudgmentResolver(page_url) if page_url else None
 
     click_hits = [
         hit for hit in hits
@@ -115,19 +123,34 @@ def classify_network_tags(
         if element_key in classified_element_keys:
             continue
 
-        issues.append(_to_missing_event_issue_item(element))
+        evidence = rag_resolver.find_for_element(
+            element_selector=element.selector,
+            element_text=element.text or "",
+            group_key=element.click_group_id or element.structure_group_key or "",
+        ) if rag_resolver else None
+
+        if evidence and evidence.available and not evidence.matched:
+            review_items.append(_to_review_item(element, evidence))
+        else:
+            issues.append(_to_missing_event_issue_item(element, evidence))
         classified_element_keys.add(element_key)
 
-    tracked_items, issues = expand_grouped_overlay_results(tracked_items, issues, elements)
+    tracked_items, issues, review_items = expand_grouped_overlay_results(
+        tracked_items,
+        issues,
+        elements,
+        review_items,
+    )
 
     logger.info(
-        "Classified tags: %d network click hits, %d elements -> %d tracked, %d missing",
+        "Classified tags: %d network click hits, %d elements -> %d tracked, %d missing, %d review",
         len(click_hits),
         len(elements or []),
         len(tracked_items),
         len(issues),
+        len(review_items),
     )
-    return tracked_items, issues
+    return tracked_items, issues, review_items
 
 
 def _element_key(element: PageElement) -> str:
@@ -279,12 +302,45 @@ def _to_issue_item(
     )
 
 
-def _to_missing_event_issue_item(element: PageElement) -> AiAnalysisItem:
+def _to_missing_event_issue_item(
+    element: PageElement,
+    evidence: Optional[RagJudgmentEvidence] = None,
+) -> AiAnalysisItem:
+    rag_matched = bool(evidence and evidence.matched and evidence.reference)
+    if rag_matched and evidence:
+        recommended_spec = recommended_spec_from_evidence(
+            evidence,
+            element.selector,
+            element.text or "",
+        )
+        issue = "클릭 이벤트 미발생 · 유사한 ga4Common 태깅 사례 확인"
+    else:
+        recommended_spec = {
+            "event_name": "",
+            "element_selector": element.selector,
+            "ep_button_area": "",
+            "ep_button_area2": "",
+            "ep_button_name": element.text or "",
+        }
+        issue = "클릭 이벤트 미발생"
+
     return AiAnalysisItem(
         element_selector=element.selector,
         element_text=element.text or "",
         bounding_box=element.bounding_box if element.bounding_box else EMPTY_BOUNDING_BOX,
-        issue="클릭 이벤트 미발생",
+        issue=issue,
+        recommended_ga_spec=recommended_spec,
+        judgment_source="rag" if rag_matched else "rule",
+        rag_score=evidence.score if rag_matched and evidence else None,
+    )
+
+
+def _to_review_item(element: PageElement, evidence: RagJudgmentEvidence) -> AiAnalysisItem:
+    return AiAnalysisItem(
+        element_selector=element.selector,
+        element_text=element.text or "",
+        bounding_box=element.bounding_box if element.bounding_box else EMPTY_BOUNDING_BOX,
+        issue="실제 클릭 이벤트와 유사한 ga4Common 근거가 없어 확인이 필요합니다.",
         recommended_ga_spec={
             "event_name": "",
             "element_selector": element.selector,
@@ -292,4 +348,6 @@ def _to_missing_event_issue_item(element: PageElement) -> AiAnalysisItem:
             "ep_button_area2": "",
             "ep_button_name": element.text or "",
         },
+        judgment_source="rag",
+        rag_score=evidence.score,
     )

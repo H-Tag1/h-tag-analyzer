@@ -260,9 +260,11 @@ def expand_grouped_overlay_results(
     tracked_items: List[TrackedAnalysisItem],
     issues: List[AiAnalysisItem],
     elements: Optional[List[PageElement]],
-) -> Tuple[List[TrackedAnalysisItem], List[AiAnalysisItem]]:
+    review_items: Optional[List[AiAnalysisItem]] = None,
+) -> Tuple[List[TrackedAnalysisItem], List[AiAnalysisItem], List[AiAnalysisItem]]:
+    source_reviews = review_items or []
     if not elements:
-        return tracked_items, issues
+        return tracked_items, issues, source_reviews
 
     classified_keys = {
         _overlay_key_from_item(item.element_selector, item.element_text)
@@ -272,6 +274,10 @@ def expand_grouped_overlay_results(
         _overlay_key_from_item(item.element_selector, item.element_text)
         for item in issues
     )
+    classified_keys.update(
+        _overlay_key_from_item(item.element_selector, item.element_text)
+        for item in source_reviews
+    )
 
     groups: Dict[str, List[PageElement]] = defaultdict(list)
     for element in elements:
@@ -280,6 +286,7 @@ def expand_grouped_overlay_results(
 
     expanded_tracked = list(tracked_items)
     expanded_issues = list(issues)
+    expanded_reviews = list(source_reviews)
     inherited_count = 0
 
     for group_id, members in groups.items():
@@ -303,7 +310,14 @@ def expand_grouped_overlay_results(
             ),
             None,
         )
-        if not rep_tracked and not rep_issue:
+        rep_review = next(
+            (
+                item for item in source_reviews
+                if _overlay_key_from_item(item.element_selector, item.element_text) == rep_key
+            ),
+            None,
+        )
+        if not rep_tracked and not rep_issue and not rep_review:
             continue
 
         for member in members:
@@ -330,12 +344,16 @@ def expand_grouped_overlay_results(
                         }
                     )
                 )
-            elif rep_issue:
-                adapted_spec = copy.deepcopy(rep_issue.recommended_ga_spec)
+            elif rep_issue or rep_review:
+                source_item = rep_issue or rep_review
+                if source_item is None:
+                    continue
+                adapted_spec = copy.deepcopy(source_item.recommended_ga_spec)
                 adapted_spec["element_selector"] = member.selector
                 adapted_spec["ep_button_name"] = member.text or adapted_spec.get("ep_button_name", "")
-                expanded_issues.append(
-                    rep_issue.model_copy(
+                target = expanded_issues if rep_issue else expanded_reviews
+                target.append(
+                    source_item.model_copy(
                         update={
                             "element_selector": member.selector,
                             "element_text": member.text or "",
@@ -355,4 +373,4 @@ def expand_grouped_overlay_results(
             len(groups),
         )
 
-    return expanded_tracked, expanded_issues
+    return expanded_tracked, expanded_issues, expanded_reviews

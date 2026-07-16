@@ -37,6 +37,9 @@ class TagRequestValidationItem(BaseModel):
     bounding_box: Optional[BoundingBox] = None
     substitutions: List[TagRequestSubstitution] = Field(default_factory=list)
     match_source: str = "rule"
+    judgment_source: str = "rule"
+    judgment_reason: str = ""
+    rag_score: Optional[float] = None
     matched_tag: Optional[TagRequestMatch] = None
 
 
@@ -52,6 +55,7 @@ class TagRequestSheetResult(BaseModel):
     total_count: int = 0
     normal_count: int = 0
     missing_count: int = 0
+    review_count: int = 0
     error: Optional[str] = None
     items: List[TagRequestValidationItem] = Field(default_factory=list)
 
@@ -61,4 +65,5 @@ class TagRequestValidationResponse(BaseModel):
     total_count: int = 0
     normal_count: int = 0
     missing_count: int = 0
+    review_count: int = 0
     sheets: List[TagRequestSheetResult] = Field(default_factory=list)

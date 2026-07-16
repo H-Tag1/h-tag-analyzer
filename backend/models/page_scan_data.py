@@ -16,5 +16,6 @@ class PageScanData(BaseModel):
     channel_label: Optional[str] = None
     datalayer_events: List[Dict[str, Any]]
     issues: List[AiAnalysisItem]
+    review_items: List[AiAnalysisItem] = Field(default_factory=list)
     tracked_items: List[TrackedAnalysisItem] = Field(default_factory=list)
     network_tags: List[NetworkTagHit] = Field(default_factory=list)

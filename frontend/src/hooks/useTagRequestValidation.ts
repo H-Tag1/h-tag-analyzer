@@ -185,8 +185,17 @@ export function useTagRequestValidation() {
               setProgress(sheetProgress(event, 90, '결과 화면 캡처 완료'))
               break
             case 'matching_start':
-              setProgress(sheetProgress(event, 93, '요청 항목 대조 중'))
+              setProgress(sheetProgress(event, 93, '요청 항목 및 RAG 근거 대조 중'))
               break
+            case 'matching_progress': {
+              const ratio = event.total > 0 ? event.current / event.total : 1
+              setProgress(sheetProgress(
+                event,
+                93 + ratio * 2,
+                '요청 항목 및 RAG 근거 대조 중',
+              ))
+              break
+            }
             case 'ai_matching_start':
               setProgress(sheetProgress(event, 95, 'AI 화면 위치 분석 중'))
               break

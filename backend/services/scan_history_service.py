@@ -27,6 +27,7 @@ def save_scan_history(
     created_at = datetime.now(timezone.utc).isoformat()
 
     issue_count = sum(len(page.issues) for page in pages)
+    review_count = sum(len(page.review_items) for page in pages)
     tracked_count = sum(len(page.tracked_items) for page in pages)
 
     record = ScanHistoryRecord(
@@ -37,6 +38,7 @@ def save_scan_history(
         tracking_id=tracking_id,
         page_count=len(pages),
         issue_count=issue_count,
+        review_count=review_count,
         tracked_count=tracked_count,
         has_generated_code=False,
         created_at=created_at,
