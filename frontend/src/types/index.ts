@@ -115,6 +115,13 @@ export interface TagRequestSubstitution {
   value: string
 }
 
+export interface TagRequestCodeTarget {
+  target_id: string
+  selector: string
+  reference_code: string
+  source: 'reference' | 'rag' | 'runtime' | string
+}
+
 export interface TagRequestCandidateResult {
   candidate_key: string
   element_selector: string
@@ -125,6 +132,7 @@ export interface TagRequestCandidateResult {
   missing_fields: string[]
   substitutions: TagRequestSubstitution[]
   matched_tag?: TagRequestMatch | null
+  reference_rule_ids?: string[]
   reason: string
 }
 
@@ -145,6 +153,7 @@ export interface TagRequestValidationItem {
   missing_candidate_count: number
   review_candidate_count: number
   candidate_results: TagRequestCandidateResult[]
+  code_targets?: TagRequestCodeTarget[]
 }
 
 export interface ScreenshotSegment {

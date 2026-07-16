@@ -31,6 +31,13 @@ class TagRequestSubstitution(BaseModel):
     value: str
 
 
+class TagRequestCodeTarget(BaseModel):
+    target_id: str
+    selector: str
+    reference_code: str = ""
+    source: str = "reference"
+
+
 class TagRequestCandidateResult(BaseModel):
     candidate_key: str
     element_selector: str = ""
@@ -41,6 +48,7 @@ class TagRequestCandidateResult(BaseModel):
     missing_fields: List[str] = Field(default_factory=list)
     substitutions: List[TagRequestSubstitution] = Field(default_factory=list)
     matched_tag: Optional[TagRequestMatch] = None
+    reference_rule_ids: List[str] = Field(default_factory=list)
     reason: str = ""
 
 
@@ -61,6 +69,7 @@ class TagRequestValidationItem(BaseModel):
     missing_candidate_count: int = 0
     review_candidate_count: int = 0
     candidate_results: List[TagRequestCandidateResult] = Field(default_factory=list)
+    code_targets: List[TagRequestCodeTarget] = Field(default_factory=list)
 
 
 class TagRequestSheetResult(BaseModel):

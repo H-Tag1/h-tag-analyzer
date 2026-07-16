@@ -147,6 +147,7 @@ class CandidateCoverageTest(unittest.TestCase):
             ep_button_area="라메르",
             ep_button_area2="면세전용상품",
             ep_button_name="{{prodName}}",
+            code='$(document).on("click", ".lamer .main_travel ul li a", function () {});',
         )
 
     def _element(self, key: str, area2: str, name: str, tested: bool = True) -> PageElement:
@@ -182,6 +183,23 @@ class CandidateCoverageTest(unittest.TestCase):
         self.assertEqual(result.candidate_count, 2)
         self.assertEqual(result.matched_count, 1)
         self.assertEqual(result.missing_candidate_count, 1)
+        self.assertEqual(len(result.code_targets), 1)
+        self.assertEqual(result.code_targets[0].selector, self.rule.selector)
+        self.assertEqual(result.code_targets[0].reference_code, self.rule.code)
+
+    def test_normal_candidates_do_not_create_code_targets(self) -> None:
+        first = self._element("first", "면세전용상품", "크림")
+        second = self._element("second", "면세전용상품", "로션")
+
+        result = _validate_request_candidates(
+            self.request,
+            [self.rule],
+            [first, second],
+            [first.model_copy(deep=True), second.model_copy(deep=True)],
+        )
+
+        self.assertEqual(result.status, "normal")
+        self.assertEqual(result.code_targets, [])
 
     def test_unclickable_candidate_requires_review(self) -> None:
         element = self._element("unclickable", "면세전용상품", "크림", tested=False)

@@ -29,6 +29,7 @@ class TagRequestReferenceRule:
     ep_button_area: str
     ep_button_area2: str
     ep_button_name: str
+    code: str = ""
     example_score: int = 0
 
     def to_browser_payload(self) -> Dict[str, Any]:
@@ -87,6 +88,7 @@ def build_tag_request_reference_rules(
                 ep_button_area=chunk.ep_button_area,
                 ep_button_area2=chunk.ep_button_area2,
                 ep_button_name=chunk.ep_button_name,
+                code=chunk.code,
                 example_score=example_score,
             ))
 

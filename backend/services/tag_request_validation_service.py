@@ -8,6 +8,7 @@ from models.page_element import PageElement
 from models.scan_request import ScanRange
 from models.tag_request_validation import (
     TagRequestCandidateResult,
+    TagRequestCodeTarget,
     TagRequestItem,
     TagRequestMatch,
     TagRequestSheetResult,
@@ -16,7 +17,10 @@ from models.tag_request_validation import (
     TagRequestValidationResponse,
 )
 from services.page_scan_service import collect_page_data_with_clean_capture
-from services.hybrid_tag_judgment_service import HybridTagJudgmentResolver
+from services.hybrid_tag_judgment_service import (
+    HybridTagJudgmentResolver,
+    RagJudgmentEvidence,
+)
 from services.tag_request_excel_service import ParsedTagRequestSheet, parse_tag_request_workbook
 from services.tag_request_matching_service import (
     RequestParameterMatch,
@@ -294,6 +298,7 @@ def _validate_request_item(
                 ep_button_name=(best_actual_params or {}).get("ep_button_name", ""),
                 trigger=best_trigger,
             ),
+            code_targets=_runtime_code_targets(request, tracking_elements),
         )
 
     evidence = rag_resolver.find_for_request(
@@ -320,6 +325,11 @@ def _validate_request_item(
         ),
         rag_score=evidence.score,
         matched_tag=None,
+        code_targets=(
+            _rag_code_targets(request, evidence)
+            if not should_review
+            else []
+        ),
     )
 
 
@@ -364,6 +374,7 @@ def _validate_request_candidates(
             candidate_key,
             representative,
             bounding_box,
+            sorted(rule_ids.intersection(representative.request_rule_ids)),
         ))
 
     missing_count = sum(1 for result in candidate_results if result.status == "missing")
@@ -397,6 +408,22 @@ def _validate_request_candidates(
         (result.matched_tag for result in candidate_results if result.matched_tag),
         None,
     )
+    missing_rule_ids = {
+        rule_id
+        for result in candidate_results
+        if result.status == "missing"
+        for rule_id in result.reference_rule_ids
+    }
+    code_targets = [
+        TagRequestCodeTarget(
+            target_id=rule.rule_id,
+            selector=rule.selector,
+            reference_code=rule.code,
+            source="reference",
+        )
+        for rule in rules
+        if rule.rule_id in missing_rule_ids
+    ]
 
     return TagRequestValidationItem(
         request=request,
@@ -417,6 +444,7 @@ def _validate_request_candidates(
         missing_candidate_count=missing_count,
         review_candidate_count=review_count,
         candidate_results=candidate_results,
+        code_targets=code_targets,
     )
 
 
@@ -455,6 +483,7 @@ def _validate_candidate_element(
     candidate_key: str,
     element: PageElement,
     bounding_box: Optional[BoundingBox],
+    reference_rule_ids: List[str],
 ) -> TagRequestCandidateResult:
     if not element.click_tested:
         return TagRequestCandidateResult(
@@ -465,6 +494,7 @@ def _validate_candidate_element(
             click_tested=False,
             bounding_box=bounding_box,
             missing_fields=["click_unavailable"],
+            reference_rule_ids=reference_rule_ids,
             reason="요소를 클릭하지 못해 실제 이벤트 발생 여부를 확인할 수 없습니다.",
         )
 
@@ -482,6 +512,7 @@ def _validate_candidate_element(
             click_tested=True,
             bounding_box=bounding_box,
             missing_fields=["event_name", *EP_FIELDS],
+            reference_rule_ids=reference_rule_ids,
             reason="클릭은 수행됐지만 요청한 click_* 이벤트가 발생하지 않았습니다.",
         )
 
@@ -514,12 +545,54 @@ def _validate_candidate_element(
         missing_fields=parameter_match.missing_fields,
         substitutions=_substitutions_from_match(parameter_match),
         matched_tag=matched_tag,
+        reference_rule_ids=reference_rule_ids,
         reason=(
             "실제 GA 이벤트가 요청 명세와 일치합니다."
             if parameter_match.matched
             else "실제 이벤트는 발생했지만 요청 명세와 일치하지 않습니다."
         ),
     )
+
+
+def _runtime_code_targets(
+    request: TagRequestItem,
+    elements: List[PageElement],
+) -> List[TagRequestCodeTarget]:
+    for element in elements:
+        if not element.selector:
+            continue
+        if any(
+            event_name_from_dict(event) == request.event_name
+            for event in element.click_tracking_events
+        ):
+            return [TagRequestCodeTarget(
+                target_id=f"runtime-{request.row_number}-{element.element_index}",
+                selector=element.selector,
+                source="runtime",
+            )]
+    return []
+
+
+def _rag_code_targets(
+    request: TagRequestItem,
+    evidence: RagJudgmentEvidence,
+) -> List[TagRequestCodeTarget]:
+    reference = evidence.reference
+    if not reference or not reference.element_selector:
+        return []
+
+    reference_params = {
+        "ep_button_area": reference.ep_button_area,
+        "ep_button_area2": reference.ep_button_area2,
+        "ep_button_name": reference.ep_button_name,
+    }
+    exact_reference = match_request_parameters(request, reference_params).matched
+    return [TagRequestCodeTarget(
+        target_id=f"rag-{reference.chunk_id}",
+        selector=reference.element_selector,
+        reference_code=reference.code if exact_reference else "",
+        source="rag",
+    )]
 
 
 def _find_element_for_request(

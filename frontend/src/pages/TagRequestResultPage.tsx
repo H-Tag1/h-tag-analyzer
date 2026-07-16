@@ -1,13 +1,17 @@
 import { useRef, useState } from 'react'
-import { ArrowLeft, AlertCircle, CheckCircle2, ChevronDown, ExternalLink, FileSpreadsheet, XCircle } from 'lucide-react'
+import { ArrowLeft, AlertCircle, CheckCircle2, ChevronDown, Code2, ExternalLink, FileSpreadsheet, Loader2, XCircle } from 'lucide-react'
 import type {
   BoundingBox,
   TagRequestCandidateResult,
+  TagRequestCodeTarget,
   TagRequestSheetResult,
   TagRequestValidationItem,
   TagRequestValidationResponse,
 } from '../types'
+import CodeViewer from '../components/CodeViewer'
+import TagSpecEditor from '../components/TagSpecEditor'
 import { scrollElementIntoContainerAfterLayout } from '../utils/scrollIntoContainer'
+import { toGaSpec, type TagSpec } from '../utils/tagSpec'
 
 interface Props {
   result: TagRequestValidationResponse
@@ -80,6 +84,57 @@ function defaultPanelTab(sheet?: TagRequestSheetResult | null): PanelTab {
   if (sheet.missing_count > 0) return 'missing'
   if ((sheet.review_count ?? 0) > 0) return 'review'
   return 'normal'
+}
+
+function requestTagSpec(item: TagRequestValidationItem): TagSpec {
+  return {
+    event_name: item.request.event_name,
+    ep_button_area: item.request.ep_button_area,
+    ep_button_area2: item.request.ep_button_area2,
+    ep_button_name: item.request.ep_button_name,
+  }
+}
+
+function sameTagSpec(left: TagSpec, right: TagSpec) {
+  return (
+    left.event_name.trim() === right.event_name.trim()
+    && left.ep_button_area.trim() === right.ep_button_area.trim()
+    && left.ep_button_area2.trim() === right.ep_button_area2.trim()
+    && left.ep_button_name.trim() === right.ep_button_name.trim()
+  )
+}
+
+interface CodeGenerationEntry {
+  item: TagRequestValidationItem
+  target: TagRequestCodeTarget
+  spec: TagSpec
+}
+
+function codeGenerationEntries(
+  sheet: TagRequestSheetResult,
+  editedSpecs: Record<string, TagSpec>,
+): CodeGenerationEntry[] {
+  const entries = new Map<string, CodeGenerationEntry>()
+  sheet.items
+    .filter(item => item.status === 'missing')
+    .forEach(item => {
+      const spec = editedSpecs[keyOf(item)] ?? requestTagSpec(item)
+      const targets = item.code_targets ?? []
+      targets.forEach(target => {
+        if (!target.selector.trim()) return
+        const dedupeKey = JSON.stringify([
+          target.selector.trim(),
+          spec.event_name.trim(),
+          spec.ep_button_area.trim(),
+          spec.ep_button_area2.trim(),
+          spec.ep_button_name.trim(),
+        ])
+        if (!entries.has(dedupeKey)) {
+          entries.set(dedupeKey, { item, target, spec })
+        }
+      })
+    })
+  return [...entries.values()]
 }
 
 function screenshotSegments(sheet: TagRequestSheetResult) {
@@ -243,6 +298,50 @@ function CandidateCoverage({ item }: { item: TagRequestValidationItem }) {
   )
 }
 
+function MissingCodeEditor({
+  item,
+  value,
+  onChange,
+}: {
+  item: TagRequestValidationItem
+  value: TagSpec
+  onChange: (value: TagSpec) => void
+}) {
+  const targets = item.code_targets ?? []
+
+  return (
+    <div className="mt-4 border-t border-[#2A2A2A] pt-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-xs font-medium text-[#D4D4D8]">코드 생성값</p>
+        {targets.length > 0 && (
+          <span className="text-[10px] text-[#71717A]">selector {targets.length}개</span>
+        )}
+      </div>
+
+      {targets.length > 0 ? (
+        <>
+          <div className="mb-3 space-y-1">
+            {targets.map(target => (
+              <code
+                key={target.target_id}
+                className="block truncate rounded bg-[#0D0D0D] px-2 py-1.5 text-[10px] text-[#A1A1AA]"
+                title={target.selector}
+              >
+                {target.selector}
+              </code>
+            ))}
+          </div>
+          <TagSpecEditor value={value} onChange={onChange} />
+        </>
+      ) : (
+        <p className="text-xs leading-5 text-amber-300">
+          코드 생성에 필요한 selector를 찾지 못했습니다.
+        </p>
+      )}
+    </div>
+  )
+}
+
 interface ItemOverlay {
   key: string
   box: BoundingBox
@@ -278,6 +377,10 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
   const [panelTab, setPanelTab] = useState<PanelTab>(() => defaultPanelTab(result.sheets[0]))
   const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null)
   const [expandedItemKeys, setExpandedItemKeys] = useState<Set<string>>(() => new Set())
+  const [editedTagSpecs, setEditedTagSpecs] = useState<Record<string, TagSpec>>({})
+  const [generatedCodes, setGeneratedCodes] = useState<Record<string, string>>({})
+  const [generationErrors, setGenerationErrors] = useState<Record<string, string>>({})
+  const [generatingSheet, setGeneratingSheet] = useState<string | null>(null)
   const captureScrollRef = useRef<HTMLDivElement>(null)
   const overlayRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
@@ -287,6 +390,13 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
     itemOverlays(item).map(overlay => ({ item, ...overlay }))
   ))
   const captureSegments = current ? screenshotSegments(current) : []
+  const generationEntries = current ? codeGenerationEntries(current, editedTagSpecs) : []
+  const missingWithoutSelector = current
+    ? current.items.filter(item => item.status === 'missing' && !(item.code_targets ?? []).length).length
+    : 0
+  const generatedCode = current ? generatedCodes[current.sheet_name] ?? '' : ''
+  const generationError = current ? generationErrors[current.sheet_name] ?? '' : ''
+  const isGeneratingCode = current ? generatingSheet === current.sheet_name : false
 
   if (!current) {
     return (
@@ -346,6 +456,74 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
       })
     } else {
       setSelectedItemKey(previous => previous === key ? null : previous)
+    }
+  }
+
+  const handleTagSpecChange = (item: TagRequestValidationItem, value: TagSpec) => {
+    const itemKey = keyOf(item)
+    const sheetName = item.request.sheet_name
+    setEditedTagSpecs(previous => ({ ...previous, [itemKey]: value }))
+    setGeneratedCodes(previous => {
+      const next = { ...previous }
+      delete next[sheetName]
+      return next
+    })
+    setGenerationErrors(previous => {
+      const next = { ...previous }
+      delete next[sheetName]
+      return next
+    })
+  }
+
+  const handleGenerateCode = async () => {
+    if (!current || !current.url || generationEntries.length === 0) return
+
+    const sheetName = current.sheet_name
+    const pageUrl = current.url
+    setGeneratingSheet(sheetName)
+    setGenerationErrors(previous => ({ ...previous, [sheetName]: '' }))
+    setGeneratedCodes(previous => {
+      const next = { ...previous }
+      delete next[sheetName]
+      return next
+    })
+
+    try {
+      const blocks = await Promise.all(generationEntries.map(async ({ item, target, spec }) => {
+        let code: string
+        if (target.reference_code.trim() && sameTagSpec(spec, requestTagSpec(item))) {
+          code = target.reference_code.trim()
+        } else {
+          const response = await fetch('/api/generate-code', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              ga_spec: toGaSpec(spec, target.selector),
+              page_url: pageUrl,
+            }),
+          })
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => null)
+            throw new Error(errorData?.detail ?? '코드 생성에 실패했습니다.')
+          }
+          const data = await response.json() as { code?: string }
+          code = String(data.code ?? '').trim()
+          if (!code) throw new Error('생성된 코드가 비어 있습니다.')
+        }
+
+        return `// 요청 ${item.request.request_no}: ${itemTitle(item)}\n${code}`
+      }))
+      setGeneratedCodes(previous => ({
+        ...previous,
+        [sheetName]: blocks.join('\n\n'),
+      }))
+    } catch (error) {
+      setGenerationErrors(previous => ({
+        ...previous,
+        [sheetName]: error instanceof Error ? error.message : '코드 생성에 실패했습니다.',
+      }))
+    } finally {
+      setGeneratingSheet(previous => previous === sheetName ? null : previous)
     }
   }
 
@@ -513,6 +691,42 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
         </div>
 
         <aside className="w-80 flex-shrink-0 border-l border-[#2A2A2A] bg-[#111] flex flex-col min-h-0 overflow-hidden">
+          {current.missing_count > 0 && (
+            <div className="flex-shrink-0 border-b border-[#2A2A2A] p-3">
+              <button
+                type="button"
+                onClick={handleGenerateCode}
+                disabled={isGeneratingCode || generationEntries.length === 0 || !current.url}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#6D28D9] px-3 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#7C3AED] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isGeneratingCode
+                  ? <><Loader2 size={15} className="animate-spin" /> 코드 생성 중</>
+                  : <><Code2 size={15} /> 확정 및 코드 생성 ({generationEntries.length}건)</>
+                }
+              </button>
+
+              {!current.url && (
+                <p className="mt-2 text-[11px] leading-4 text-amber-300">
+                  페이지 URL이 없어 코드를 생성할 수 없습니다.
+                </p>
+              )}
+              {missingWithoutSelector > 0 && (
+                <p className="mt-2 text-[11px] leading-4 text-amber-300">
+                  selector가 없는 누락 {missingWithoutSelector}건은 코드 생성에서 제외됩니다.
+                </p>
+              )}
+              {generationError && (
+                <p className="mt-2 text-xs leading-5 text-red-300" role="alert">{generationError}</p>
+              )}
+              {generatedCode && (
+                <div className="mt-3 max-h-56 overflow-y-auto">
+                  <p className="mb-1.5 text-[11px] text-[#71717A]">ga4common.js 코드</p>
+                  <CodeViewer code={generatedCode} />
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex border-b border-[#2A2A2A]">
             {([
               ['all', `전체 (${current.total_count})`, 'border-blue-400'],
@@ -612,6 +826,13 @@ export default function TagRequestResultPage({ result, onBack }: Props) {
                         <CandidateCoverage item={item} />
                         <Substitutions item={item} />
                         <MissingFields fields={item.missing_fields} />
+                        {item.status === 'missing' && (
+                          <MissingCodeEditor
+                            item={item}
+                            value={editedTagSpecs[key] ?? requestTagSpec(item)}
+                            onChange={value => handleTagSpecChange(item, value)}
+                          />
+                        )}
                       </div>
                     )}
                   </article>
