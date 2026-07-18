@@ -13,8 +13,10 @@ from services.ga_event_exclusion_service import (
 from models.network_tag_hit import NetworkTagHit
 from services.tracking.event_normalizer import (
     element_has_verified_click_tracking,
+    ep_button_names_match,
     extract_ep_params,
     is_interaction_event,
+    normalize_element_label,
     params_from_event_dict,
 )
 from services.tracking.tracking_data import merge_tracking_data
@@ -704,23 +706,34 @@ def _tracking_event_priority(event: Dict[str, Any]) -> int:
     return 1
 
 
-def _normalize_element_label(text: Optional[str]) -> str:
-    return "".join((text or "").split()).lower()
-
-
 def _filter_events_for_element_label(
     element: PageElement,
     events: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    label = _normalize_element_label(element.text)
+    if not events:
+        return events
+
+    interaction_events = [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and is_interaction_event(
+            _event_name_from_tracking_dict(event),
+            params_from_event_dict(event),
+        )
+    ]
+    if interaction_events:
+        return interaction_events
+
+    label = normalize_element_label(element.text)
     if not label:
         return events
 
     filtered: List[Dict[str, Any]] = []
     for event in events:
         params = params_from_event_dict(event)
-        event_label = _normalize_element_label(params.get("ep_button_name", ""))
-        if event_label and event_label != label:
+        event_label = params.get("ep_button_name", "")
+        if event_label and not ep_button_names_match(element.text, event_label):
             continue
         filtered.append(event)
     return filtered
@@ -742,22 +755,19 @@ def attach_click_network_hits_to_elements(
         return 0
 
     attached = 0
-    for element in elements:
+    used_hit_indices: set[int] = set()
+    for element in sorted(elements, key=lambda item: item.element_index):
         if is_hamburger_drawer_element(element) or not element.click_tested:
             continue
         if element_has_verified_click_tracking(element):
             continue
 
-        label = _normalize_element_label(element.text)
-        if not label:
-            continue
-
-        for hit in click_hits:
+        for idx, hit in enumerate(click_hits):
+            if idx in used_hit_indices:
+                continue
             params = extract_ep_params(hit)
             event_name = (hit.event_name or "").strip()
             if not is_interaction_event(event_name, params):
-                continue
-            if _normalize_element_label(params.get("ep_button_name", "")) != label:
                 continue
 
             event_dict = {
@@ -769,6 +779,7 @@ def attach_click_network_hits_to_elements(
             if "click_network" not in element.tracking_methods:
                 element.tracking_methods.append("click_network")
             element.tracking_data = merge_tracking_data(element.tracking_data, event_dict)
+            used_hit_indices.add(idx)
             attached += 1
             break
 

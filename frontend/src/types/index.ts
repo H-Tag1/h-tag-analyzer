@@ -13,7 +13,11 @@ export interface AiAnalysisItem {
   recommended_ga_spec: Record<string, unknown>
   judgment_source?: string
   rag_score?: number | null
+  verification_source?: TrackedVerificationSource
+  click_group_id?: string | null
 }
+
+export type TrackedVerificationSource = 'direct' | 'group_inherited'
 
 export interface TrackedAnalysisItem {
   element_selector: string
@@ -22,6 +26,7 @@ export interface TrackedAnalysisItem {
   tracking_description: string
   tracking_data: Record<string, unknown>
   detection_methods?: string[]
+  verification_source?: TrackedVerificationSource
 }
 
 export interface ExcludedAnalysisItem {

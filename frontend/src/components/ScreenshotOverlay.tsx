@@ -132,6 +132,7 @@ export default function ScreenshotOverlay({
         {trackedItems.map((item, i) => {
           if (!hasVisibleBox(item.bounding_box)) return null
           const isSelected = selectedTrackedIndex === i
+          const isGroupInherited = item.verification_source === 'group_inherited'
 
           return (
             <div
@@ -150,12 +151,18 @@ export default function ScreenshotOverlay({
                 ...boxToStyle(item.bounding_box, originalWidth, originalHeight),
               }}
               className={`cursor-pointer rounded transition-all ${
-                isSelected
-                  ? 'bg-emerald-500/30 border-2 border-emerald-400 shadow-lg shadow-emerald-900/40 z-20'
-                  : 'bg-emerald-500/15 border border-emerald-500/60 hover:bg-emerald-500/25 z-10'
+                isGroupInherited
+                  ? isSelected
+                    ? 'bg-lime-400/30 border-2 border-lime-300 shadow-lg shadow-lime-900/30 z-20'
+                    : 'bg-lime-400/15 border border-lime-300/70 hover:bg-lime-400/25 z-10'
+                  : isSelected
+                    ? 'bg-emerald-500/30 border-2 border-emerald-400 shadow-lg shadow-emerald-900/40 z-20'
+                    : 'bg-emerald-500/15 border border-emerald-500/60 hover:bg-emerald-500/25 z-10'
               }`}
             >
-              <span className="absolute -top-5 left-0 text-[10px] text-emerald-400 bg-[#1A1A1A]/90 px-1 rounded whitespace-nowrap max-w-[180px] truncate pointer-events-none">
+              <span className={`absolute -top-5 left-0 text-[10px] bg-[#1A1A1A]/90 px-1 rounded whitespace-nowrap max-w-[180px] truncate pointer-events-none ${
+                isGroupInherited ? 'text-lime-300' : 'text-emerald-400'
+              }`}>
                 {item.tracking_data?.event_name as string || item.element_text || item.element_selector}
               </span>
             </div>
@@ -165,6 +172,7 @@ export default function ScreenshotOverlay({
         {issues.map((item, i) => {
           if (!hasVisibleBox(item.bounding_box)) return null
           const isSelected = selectedIssueIndex === i
+          const isGroupInherited = item.verification_source === 'group_inherited'
 
           return (
             <div
@@ -183,12 +191,18 @@ export default function ScreenshotOverlay({
                 ...boxToStyle(item.bounding_box, originalWidth, originalHeight),
               }}
               className={`cursor-pointer rounded transition-all ${
-                isSelected
-                  ? 'bg-red-500/30 border-2 border-red-400 shadow-lg shadow-red-900/40 z-20'
-                  : 'bg-red-500/15 border border-red-500/60 hover:bg-red-500/25 z-10'
+                isGroupInherited
+                  ? isSelected
+                    ? 'bg-yellow-400/30 border-2 border-yellow-300 shadow-lg shadow-yellow-900/30 z-20'
+                    : 'bg-yellow-400/15 border border-yellow-300/70 hover:bg-yellow-400/25 z-10'
+                  : isSelected
+                    ? 'bg-red-500/30 border-2 border-red-400 shadow-lg shadow-red-900/40 z-20'
+                    : 'bg-red-500/15 border border-red-500/60 hover:bg-red-500/25 z-10'
               }`}
             >
-              <span className="absolute -top-5 left-0 text-[10px] text-red-400 bg-[#1A1A1A]/90 px-1 rounded whitespace-nowrap max-w-[180px] truncate pointer-events-none">
+              <span className={`absolute -top-5 left-0 text-[10px] bg-[#1A1A1A]/90 px-1 rounded whitespace-nowrap max-w-[180px] truncate pointer-events-none ${
+                isGroupInherited ? 'text-yellow-300' : 'text-red-400'
+              }`}>
                 {item.recommended_ga_spec?.event_name as string || item.element_text || item.element_selector}
               </span>
             </div>

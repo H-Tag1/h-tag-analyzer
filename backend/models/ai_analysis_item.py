@@ -1,6 +1,8 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 from pydantic import BaseModel
 from .bounding_box import BoundingBox
+
+IssueVerificationSource = Literal["direct", "group_inherited"]
 
 
 class AiAnalysisItem(BaseModel):
@@ -11,3 +13,5 @@ class AiAnalysisItem(BaseModel):
     recommended_ga_spec: Dict[str, Any]
     judgment_source: str = "rule"
     rag_score: Optional[float] = None
+    verification_source: IssueVerificationSource = "direct"
+    click_group_id: Optional[str] = None

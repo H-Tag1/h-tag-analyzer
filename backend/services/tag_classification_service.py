@@ -10,6 +10,7 @@ from services.tracking.event_normalizer import (
     EP_FIELDS,
     element_click_param_keys,
     element_has_verified_click_tracking,
+    ep_button_names_match,
     event_name_from_dict,
     event_signature,
     extract_ep_params,
@@ -23,7 +24,16 @@ from services.tracking.event_normalizer import (
 )
 from services.ga4_channel_service import resolve_channel_or_none
 from services.hamburger_menu_filter import is_hamburger_drawer_element
-from services.element_grouping_service import expand_grouped_overlay_results
+from services.element_grouping_service import (
+    apply_group_tracking_inheritance,
+    expand_grouped_overlay_results,
+)
+from services.header_tag_spec_service import (
+    build_header_inferred_params,
+    is_header_element,
+    is_misassigned_header_event,
+)
+from services.missing_tag_spec_service import enrich_issues_recommended_specs
 from services.hybrid_tag_judgment_service import (
     HybridTagJudgmentResolver,
     RagJudgmentEvidence,
@@ -38,7 +48,12 @@ EP_FIELD_LABELS = {
     "ep_button_name": "ep_button_name",
 }
 EMPTY_BOUNDING_BOX = BoundingBox(x=0, y=0, width=0, height=0)
-HEADER_DEFAULT_MENU_LABELS = frozenset({"검색", "장바구니", "마이현대"})
+HEADER_DEFAULT_MENU_LABELS = frozenset({
+    "검색", "장바구니", "마이현대",
+    "고객센터", "지점안내", "주문가능시간",
+    "회원가입", "로그인",
+    "krw", "cny",
+})
 HEADER_DEFAULT_MENU_MAX_Y = 160
 
 
@@ -63,6 +78,13 @@ def _infer_header_default_menu_params(
 ) -> Optional[Dict[str, str]]:
     if not page_url or not element.click_tested or not element.bounding_box:
         return None
+
+    channel = resolve_channel_or_none(page_url)
+    if channel:
+        header_params = build_header_inferred_params(channel, element)
+        if header_params:
+            return header_params
+
     if element.bounding_box.y > HEADER_DEFAULT_MENU_MAX_Y:
         return None
 
@@ -84,6 +106,52 @@ def _infer_header_default_menu_params(
         "ep_button_area2": "Header",
         "ep_button_name": label,
     }
+
+
+def _header_misassigned_issue_item(
+    element: PageElement,
+    event_name: str,
+    page_url: Optional[str],
+) -> AiAnalysisItem:
+    recommended = {
+        "event_name": "",
+        "element_selector": element.selector,
+        "ep_button_area": "Header",
+        "ep_button_area2": "Header",
+        "ep_button_name": _normalize_label(element.text or ""),
+    }
+    channel = resolve_channel_or_none(page_url) if page_url else None
+    if channel:
+        header_params = build_header_inferred_params(channel, element)
+        if header_params:
+            recommended = {
+                "event_name": header_params["event_name"],
+                "element_selector": header_params.get("element_selector") or element.selector,
+                "ep_button_area": header_params["ep_button_area"],
+                "ep_button_area2": header_params["ep_button_area2"],
+                "ep_button_name": header_params["ep_button_name"],
+            }
+
+    return AiAnalysisItem(
+        element_selector=element.selector,
+        element_text=element.text or "",
+        bounding_box=element.bounding_box if element.bounding_box else EMPTY_BOUNDING_BOX,
+        issue=(
+            f"헤더 영역인데 비공통 이벤트 발생 ({event_name}) · "
+            "ga4Common Header(공통) 패턴 확인 필요"
+        ),
+        recommended_ga_spec=recommended,
+        judgment_source="rule",
+    )
+
+
+def _enrich_issues_recommended_specs(
+    issues: List[AiAnalysisItem],
+    page_url: Optional[str],
+    elements: Optional[List[PageElement]],
+    tracked_items: Optional[List[TrackedAnalysisItem]] = None,
+) -> List[AiAnalysisItem]:
+    return enrich_issues_recommended_specs(issues, page_url, elements, tracked_items)
 
 
 def classify_network_tags(
@@ -130,7 +198,9 @@ def classify_network_tags(
             seen_keys.add(item_key)
 
             trigger = hit.trigger if hit else "click"
-            if not missing_fields:
+            if is_header_element(element) and is_misassigned_header_event(event_name):
+                issues.append(_header_misassigned_issue_item(element, event_name, page_url))
+            elif not missing_fields:
                 tracked_items.append(_to_tracked_item(element, event_name, params, trigger))
             else:
                 issues.append(_to_issue_item(element, event_name, params, missing_fields, trigger))
@@ -179,6 +249,8 @@ def classify_network_tags(
         )
         classified_element_keys.add(element_key)
 
+    tracked_items, issues = apply_group_tracking_inheritance(tracked_items, issues, elements)
+
     for element in elements or []:
         if not element.bounding_box or not element.click_tested:
             continue
@@ -211,6 +283,9 @@ def classify_network_tags(
         elements,
         review_items,
     )
+    tracked_items, issues = apply_group_tracking_inheritance(tracked_items, issues, elements)
+    issues = _enrich_issues_recommended_specs(issues, page_url, elements, tracked_items)
+    review_items = _enrich_issues_recommended_specs(review_items, page_url, elements, tracked_items)
 
     logger.info(
         "Classified tags: %d network click hits, %d elements -> %d tracked, %d missing, %d review",
@@ -242,7 +317,8 @@ def _find_element_for_hit(
     if button_name:
         exact_matches = [
             element for element in elements
-            if element.bounding_box and _normalize_label(element.text or "") == button_name
+            if element.bounding_box
+            and ep_button_names_match(element.text, params.get("ep_button_name", ""))
         ]
         if len(exact_matches) == 1:
             return exact_matches[0]
@@ -276,7 +352,10 @@ def _find_click_verified_elements(
                 continue
             event_params = params_from_event_dict(click_event)
             if button_name:
-                if _normalize_label(event_params.get("ep_button_name", "")) == button_name:
+                if ep_button_names_match(
+                    element.text,
+                    event_params.get("ep_button_name", ""),
+                ):
                     matches.append(element)
                     break
                 continue
@@ -289,7 +368,12 @@ def _find_click_verified_elements(
 def _params_match_score(left: Dict[str, str], right: Dict[str, str]) -> int:
     score = 0
     for field in EP_FIELDS:
-        if left[field] and right[field] and _normalize_label(left[field]) == _normalize_label(right[field]):
+        if not left[field] or not right[field]:
+            continue
+        if field == "ep_button_name":
+            if ep_button_names_match(left[field], right[field]):
+                score += 1
+        elif _normalize_label(left[field]) == _normalize_label(right[field]):
             score += 1
     return score
 
@@ -334,6 +418,7 @@ def _to_tracked_item(
     event_name: str,
     params: Dict[str, str],
     trigger: str,
+    verification_source: str = "direct",
 ) -> TrackedAnalysisItem:
     return TrackedAnalysisItem(
         element_selector=element.selector if element else event_name,
@@ -346,6 +431,7 @@ def _to_tracked_item(
             **params,
         },
         detection_methods=["network"] if not element else ["network", "click_datalayer"],
+        verification_source=verification_source,
     )
 
 

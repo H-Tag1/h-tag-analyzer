@@ -5,6 +5,11 @@ import re
 from typing import Any, Dict, List
 
 from config import settings
+from services.brand_context_service import (
+    apply_brand_placeholders_to_spec,
+    resolve_brand_context,
+    spec_has_brand_placeholder,
+)
 from services.code_generator_service import _make_client
 from services.ga4_channel_service import Ga4Channel, resolve_channel
 from services.rag_storage_service import (
@@ -167,21 +172,30 @@ def _suggest_tag_specs_with_rag(
     results: List[Dict[str, str]] = []
     for issue in issues:
         existing = _normalize_tag_spec(issue.get("recommended_ga_spec") or {})
-        query = build_rag_query_from_issue(issue)
-        hits = fetch_reference_chunks(channel, query, top_k=1)
-        if not hits:
+        try:
+            query = build_rag_query_from_issue(issue)
+            hits = fetch_reference_chunks(channel, query, top_k=1)
+            if not hits:
+                suggested = build_default_tag_spec(channel, str(issue.get("element_text") or ""))
+                results.append(merge_tag_spec(existing, suggested))
+                continue
+
+            filtered = filter_rag_hits_by_score(hits)
+            if not filtered:
+                suggested = build_default_tag_spec(channel, str(issue.get("element_text") or ""))
+                results.append(merge_tag_spec(existing, suggested))
+                continue
+
+            suggested = rag_hit_to_tag_spec(filtered[0], str(issue.get("element_text") or ""))
+            results.append(merge_tag_spec(existing, suggested))
+        except Exception as exc:
+            logger.warning(
+                "RAG tag spec suggestion failed for %r, using default spec: %s",
+                issue.get("element_text"),
+                exc,
+            )
             suggested = build_default_tag_spec(channel, str(issue.get("element_text") or ""))
             results.append(merge_tag_spec(existing, suggested))
-            continue
-
-        filtered = filter_rag_hits_by_score(hits)
-        if not filtered:
-            suggested = build_default_tag_spec(channel, str(issue.get("element_text") or ""))
-            results.append(merge_tag_spec(existing, suggested))
-            continue
-
-        suggested = rag_hit_to_tag_spec(filtered[0], str(issue.get("element_text") or ""))
-        results.append(merge_tag_spec(existing, suggested))
     return results
 
 
@@ -193,7 +207,7 @@ async def suggest_tag_specs_for_page(page_url: str, issues: List[Dict[str, Any]]
 
     if settings.azure_openai_key and settings.azure_openai_endpoint:
         try:
-            return await asyncio.to_thread(
+            results = await asyncio.to_thread(
                 _suggest_tag_specs_with_llm,
                 page_url,
                 channel,
@@ -201,5 +215,24 @@ async def suggest_tag_specs_for_page(page_url: str, issues: List[Dict[str, Any]]
             )
         except Exception as exc:
             logger.warning("LLM tag spec suggestion failed, using RAG fallback: %s", exc)
+            results = _suggest_tag_specs_with_rag(channel, issues)
+    else:
+        results = _suggest_tag_specs_with_rag(channel, issues)
 
-    return _suggest_tag_specs_with_rag(channel, issues)
+    merged_results: List[Dict[str, str]] = []
+    for issue, suggested in zip(issues, results):
+        existing = _normalize_tag_spec(issue.get("recommended_ga_spec") or {})
+        merged_results.append(merge_tag_spec(existing, suggested))
+
+    if any(spec_has_brand_placeholder(spec) for spec in merged_results):
+        brand_ctx = resolve_brand_context(
+            page_url,
+            issue_texts=[str(issue.get("element_text") or "") for issue in issues],
+        )
+        if brand_ctx.has_name() or brand_ctx.has_code():
+            merged_results = [
+                apply_brand_placeholders_to_spec(spec, brand_ctx)
+                for spec in merged_results
+            ]
+
+    return merged_results

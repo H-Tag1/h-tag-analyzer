@@ -10,11 +10,20 @@ from models.tracked_analysis_item import TrackedAnalysisItem
 from services.click_optimization_service import apply_llm_click_clustering
 from services.hamburger_menu_filter import is_hamburger_drawer_element
 
+from services.tracking.event_normalizer import (
+    EP_BUTTON_NAME_VALUE_PREFIXES,
+    element_has_verified_click_tracking,
+    event_name_from_dict,
+    params_from_event_dict,
+    prefer_click_events,
+)
+
 logger = logging.getLogger(__name__)
 
 MIN_GROUP_SIZE = 2
 LAYOUT_ROW_TOLERANCE_PX = 48
 LAYOUT_COLUMN_TOLERANCE_PX = 48
+VARIABLE_EP_BUTTON_NAME_PREFIXES = EP_BUTTON_NAME_VALUE_PREFIXES + ("상품_",)
 
 
 def _normalize_label(text: Optional[str]) -> str:
@@ -28,15 +37,19 @@ def _structure_group_members_compatible(members: List[PageElement]) -> bool:
     if len(drawer_flags) > 1:
         return False
 
+    xs = [member.bounding_box.x for member in members if member.bounding_box]
     ys = [member.bounding_box.y for member in members if member.bounding_box]
-    if ys and max(ys) - min(ys) > LAYOUT_ROW_TOLERANCE_PX:
-        return False
+    if not xs or not ys:
+        return True
 
-    labels = {_normalize_label(member.text) for member in members if _normalize_label(member.text)}
-    if len(labels) > 1:
-        return False
-
-    return True
+    x_spread = max(xs) - min(xs)
+    y_spread = max(ys) - min(ys)
+    # Horizontal siblings (same row) or vertical menu/tab list (same column).
+    if y_spread <= LAYOUT_ROW_TOLERANCE_PX:
+        return True
+    if x_spread <= LAYOUT_COLUMN_TOLERANCE_PX:
+        return True
+    return False
 
 
 def _pick_representative_index(members: List[PageElement]) -> int:
@@ -198,6 +211,35 @@ def should_click_for_verification(element: PageElement) -> bool:
     return element.click_group_representative
 
 
+def _adapt_ep_button_name_for_member(existing_name: str, member_label: str) -> str:
+    if not member_label:
+        return existing_name
+    for prefix in VARIABLE_EP_BUTTON_NAME_PREFIXES:
+        if existing_name.startswith(prefix):
+            return f"{prefix}{member_label}"
+    if existing_name:
+        return member_label
+    return member_label
+
+
+def _members_have_variable_labels(members: List[PageElement]) -> bool:
+    labels = {_normalize_label(member.text) for member in members if _normalize_label(member.text)}
+    return len(labels) > 1
+
+
+def _adapt_recommended_spec_for_member(
+    spec: Dict[str, Any],
+    member: PageElement,
+) -> Dict[str, Any]:
+    adapted = copy.deepcopy(spec)
+    adapted["element_selector"] = member.selector
+    label = _normalize_label(member.text)
+    if label:
+        existing_name = str(adapted.get("ep_button_name") or "")
+        adapted["ep_button_name"] = _adapt_ep_button_name_for_member(existing_name, label)
+    return adapted
+
+
 def _adapt_events_for_member(
     events: List[Dict[str, Any]],
     member: PageElement,
@@ -214,13 +256,7 @@ def _adapt_events_for_member(
         if not isinstance(event, dict):
             continue
         existing_name = str(event.get("ep_button_name") or "")
-        if existing_name.startswith("탭_") or existing_name.startswith("배너_") or existing_name.startswith("메뉴_"):
-            prefix = existing_name.split("_", 1)[0] + "_"
-            event["ep_button_name"] = f"{prefix}{label}"
-        elif existing_name:
-            event["ep_button_name"] = label
-        else:
-            event["ep_button_name"] = label
+        event["ep_button_name"] = _adapt_ep_button_name_for_member(existing_name, label)
     return copied
 
 
@@ -241,8 +277,6 @@ def propagate_group_click_results(elements: List[PageElement]) -> List[PageEleme
             if member.element_index == representative.element_index:
                 continue
             if member.request_rule_ids or member.click_tested:
-                continue
-            if _normalize_label(member.text) != _normalize_label(representative.text):
                 continue
 
             member.click_tested = representative.click_tested
@@ -278,11 +312,136 @@ def _adapt_tracking_data_for_member(
         return adapted
 
     existing_name = str(adapted.get("ep_button_name") or "")
-    if existing_name.startswith("탭_") or existing_name.startswith("배너_") or existing_name.startswith("메뉴_"):
-        adapted["ep_button_name"] = f"{existing_name.split('_', 1)[0]}_{label}"
-    else:
-        adapted["ep_button_name"] = label
+    adapted["ep_button_name"] = _adapt_ep_button_name_for_member(existing_name, label)
     return adapted
+
+
+def _tracked_item_from_verified_element(element: PageElement) -> Optional[TrackedAnalysisItem]:
+    if not element.bounding_box or not element_has_verified_click_tracking(element):
+        return None
+
+    for click_event in prefer_click_events(element.click_tracking_events):
+        event_name = event_name_from_dict(click_event)
+        params = params_from_event_dict(click_event)
+        return TrackedAnalysisItem(
+            element_selector=element.selector,
+            element_text=element.text or "",
+            bounding_box=element.bounding_box,
+            tracking_description="GA4 collect (click)",
+            tracking_data={
+                "event_name": event_name,
+                "trigger": "click",
+                **params,
+            },
+            detection_methods=["click_datalayer"],
+            verification_source="direct",
+        )
+    return None
+
+
+def _find_group_tracking_source(
+    members: List[PageElement],
+    tracked_items: List[TrackedAnalysisItem],
+) -> Tuple[Optional[PageElement], Optional[TrackedAnalysisItem]]:
+    tracked_by_key = {
+        _overlay_key_from_item(item.element_selector, item.element_text): item
+        for item in tracked_items
+    }
+
+    for member in members:
+        member_key = _element_overlay_key(member)
+        if member_key in tracked_by_key:
+            return member, tracked_by_key[member_key]
+
+    for member in members:
+        tracked_item = _tracked_item_from_verified_element(member)
+        if tracked_item:
+            return member, tracked_item
+
+    return None, None
+
+
+def apply_group_tracking_inheritance(
+    tracked_items: List[TrackedAnalysisItem],
+    issues: List[AiAnalysisItem],
+    elements: Optional[List[PageElement]],
+) -> Tuple[List[TrackedAnalysisItem], List[AiAnalysisItem]]:
+    if not elements:
+        return tracked_items, issues
+
+    groups: Dict[str, List[PageElement]] = defaultdict(list)
+    for element in elements:
+        if element.click_group_id and element.bounding_box:
+            groups[element.click_group_id].append(element)
+
+    expanded_tracked = list(tracked_items)
+    tracked_keys = {
+        _overlay_key_from_item(item.element_selector, item.element_text)
+        for item in expanded_tracked
+    }
+    promoted_keys: set[str] = set()
+    inherited_count = 0
+
+    for members in groups.values():
+        if len(members) < MIN_GROUP_SIZE:
+            continue
+
+        source_member, source_tracked = _find_group_tracking_source(members, expanded_tracked)
+        if not source_member or not source_tracked:
+            continue
+
+        source_label = (source_member.text or "").strip() or source_member.selector
+        source_key = _element_overlay_key(source_member)
+        if source_key not in tracked_keys:
+            expanded_tracked.append(source_tracked)
+            tracked_keys.add(source_key)
+
+        for member in members:
+            if member.element_index == source_member.element_index:
+                continue
+            if is_hamburger_drawer_element(member):
+                continue
+
+            member_key = _element_overlay_key(member)
+            if member_key in tracked_keys:
+                continue
+
+            expanded_tracked.append(
+                source_tracked.model_copy(
+                    update={
+                        "element_selector": member.selector,
+                        "element_text": member.text or "",
+                        "bounding_box": member.bounding_box,
+                        "tracking_data": _adapt_tracking_data_for_member(
+                            source_tracked.tracking_data,
+                            member,
+                        ),
+                        "tracking_description": (
+                            "그룹 내 검증된 요소 기준 정상 처리 "
+                            f"(기준: {source_label})"
+                        ),
+                        "verification_source": "group_inherited",
+                    }
+                )
+            )
+            tracked_keys.add(member_key)
+            promoted_keys.add(member_key)
+            inherited_count += 1
+
+    if not promoted_keys:
+        return expanded_tracked, issues
+
+    filtered_issues = [
+        issue
+        for issue in issues
+        if _overlay_key_from_item(issue.element_selector, issue.element_text) not in promoted_keys
+    ]
+    logger.info(
+        "Applied group tracking inheritance to %d sibling elements (%d issues removed)",
+        inherited_count,
+        len(issues) - len(filtered_issues),
+    )
+    return expanded_tracked, filtered_issues
 
 
 def expand_grouped_overlay_results(
@@ -325,13 +484,21 @@ def expand_grouped_overlay_results(
         representative = next((member for member in members if member.click_group_representative), members[0])
         rep_key = _element_overlay_key(representative)
 
-        rep_tracked = next(
-            (
-                item for item in tracked_items
-                if _overlay_key_from_item(item.element_selector, item.element_text) == rep_key
-            ),
-            None,
-        )
+        source_member, rep_tracked = _find_group_tracking_source(members, tracked_items)
+        if source_member is None:
+            rep_tracked = None
+        elif rep_tracked is None:
+            rep_tracked = next(
+                (
+                    item for item in tracked_items
+                    if _overlay_key_from_item(item.element_selector, item.element_text) == rep_key
+                ),
+                None,
+            )
+        else:
+            representative = source_member
+            rep_key = _element_overlay_key(representative)
+
         rep_issue = next(
             (
                 item for item in issues
@@ -349,6 +516,25 @@ def expand_grouped_overlay_results(
         if not rep_tracked and not rep_issue and not rep_review:
             continue
 
+        rep_label = (representative.text or "").strip() or representative.selector
+
+        if rep_issue:
+            rep_index = next(
+                (
+                    idx for idx, issue in enumerate(expanded_issues)
+                    if _overlay_key_from_item(issue.element_selector, issue.element_text) == rep_key
+                ),
+                None,
+            )
+            if rep_index is not None:
+                expanded_issues[rep_index] = expanded_issues[rep_index].model_copy(
+                    update={
+                        "verification_source": "direct",
+                        "click_group_id": group_id,
+                    }
+                )
+                rep_issue = expanded_issues[rep_index]
+
         for member in members:
             if member.element_index == representative.element_index:
                 continue
@@ -356,32 +542,66 @@ def expand_grouped_overlay_results(
                 continue
 
             member_key = _element_overlay_key(member)
-            if member_key in classified_keys:
-                continue
             if not member.bounding_box:
                 continue
 
             if rep_tracked:
-                expanded_tracked.append(
-                    rep_tracked.model_copy(
-                        update={
-                            "element_selector": member.selector,
-                            "element_text": member.text or "",
-                            "bounding_box": member.bounding_box,
-                            "tracking_data": _adapt_tracking_data_for_member(
-                                rep_tracked.tracking_data,
-                                member,
-                            ),
-                        }
-                    )
+                member_overlay_key = _overlay_key_from_item(member.selector, member.text or "")
+                expanded_issues = [
+                    issue for issue in expanded_issues
+                    if _overlay_key_from_item(issue.element_selector, issue.element_text) != member_overlay_key
+                ]
+                expanded_reviews = [
+                    review for review in expanded_reviews
+                    if _overlay_key_from_item(review.element_selector, review.element_text) != member_overlay_key
+                ]
+                classified_keys.discard(member_overlay_key)
+
+                already_tracked = any(
+                    _overlay_key_from_item(item.element_selector, item.element_text) == member_key
+                    for item in expanded_tracked
                 )
-            elif rep_issue or rep_review:
+                if not already_tracked:
+                    expanded_tracked.append(
+                        rep_tracked.model_copy(
+                            update={
+                                "element_selector": member.selector,
+                                "element_text": member.text or "",
+                                "bounding_box": member.bounding_box,
+                                "tracking_data": _adapt_tracking_data_for_member(
+                                    rep_tracked.tracking_data,
+                                    member,
+                                ),
+                                "tracking_description": (
+                                    "그룹 대표 요소 클릭 검증으로 정상 처리 "
+                                    f"(대표: {(representative.text or '').strip() or representative.selector})"
+                                ),
+                                "verification_source": "group_inherited",
+                            }
+                        )
+                    )
+                classified_keys.add(member_key)
+                inherited_count += 1
+                continue
+
+            if member_key in classified_keys:
+                continue
+
+            if rep_issue or rep_review:
                 source_item = rep_issue or rep_review
                 if source_item is None:
                     continue
-                adapted_spec = copy.deepcopy(source_item.recommended_ga_spec)
-                adapted_spec["element_selector"] = member.selector
-                adapted_spec["ep_button_name"] = member.text or adapted_spec.get("ep_button_name", "")
+                base_spec = (
+                    rep_issue.recommended_ga_spec
+                    if rep_issue
+                    else source_item.recommended_ga_spec
+                )
+                adapted_spec = _adapt_recommended_spec_for_member(base_spec, member)
+                inherited_issue = (
+                    f"그룹 대표 요소 누락과 동일 (대표: {rep_label})"
+                    if rep_issue
+                    else source_item.issue
+                )
                 target = expanded_issues if rep_issue else expanded_reviews
                 target.append(
                     source_item.model_copy(
@@ -389,7 +609,10 @@ def expand_grouped_overlay_results(
                             "element_selector": member.selector,
                             "element_text": member.text or "",
                             "bounding_box": member.bounding_box,
+                            "issue": inherited_issue,
                             "recommended_ga_spec": adapted_spec,
+                            "verification_source": "group_inherited" if rep_issue else "direct",
+                            "click_group_id": group_id,
                         }
                     )
                 )

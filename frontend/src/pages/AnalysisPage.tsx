@@ -51,11 +51,27 @@ export default function AnalysisPage({
     ),
     [current.tracked_items],
   )
+  const directTrackedItems = useMemo(
+    () => interactiveTrackedItems.filter(item => item.verification_source !== 'group_inherited'),
+    [interactiveTrackedItems],
+  )
+  const inheritedTrackedItems = useMemo(
+    () => interactiveTrackedItems.filter(item => item.verification_source === 'group_inherited'),
+    [interactiveTrackedItems],
+  )
   const excludedItems = current.excluded_items ?? []
   const networkTags = current.network_tags ?? []
   const visibleIssues = useMemo(
     () => current.issues.filter(issue => !sessionDismissedKeys.has(issueIdentityKey(issue))),
     [current.issues, sessionDismissedKeys],
+  )
+  const directIssues = useMemo(
+    () => visibleIssues.filter(issue => issue.verification_source !== 'group_inherited'),
+    [visibleIssues],
+  )
+  const inheritedIssues = useMemo(
+    () => visibleIssues.filter(issue => issue.verification_source === 'group_inherited'),
+    [visibleIssues],
   )
   const isBatch = pages.length > 1
 
@@ -282,16 +298,36 @@ export default function AnalysisPage({
               <span className="text-xs font-medium text-[#A1A1AA]">화면 캡처</span>
               <div className="flex items-center gap-3 text-[11px] text-[#52525B]">
                 {(panelTab === 'tracked' || panelTab === 'all') && interactiveTrackedItems.length > 0 && (
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded border border-emerald-500/60 bg-emerald-500/15" />
-                    정상 {interactiveTrackedItems.length}
-                  </span>
+                  <>
+                    {directTrackedItems.length > 0 && (
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded border border-emerald-500/60 bg-emerald-500/15" />
+                        정상 {directTrackedItems.length}
+                      </span>
+                    )}
+                    {inheritedTrackedItems.length > 0 && (
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded border border-lime-300/70 bg-lime-400/15" />
+                        그룹 정상 {inheritedTrackedItems.length}
+                      </span>
+                    )}
+                  </>
                 )}
                 {(panelTab === 'missing' || panelTab === 'all') && visibleIssues.length > 0 && (
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded border border-red-500/60 bg-red-500/15" />
-                    누락 {visibleIssues.length}
-                  </span>
+                  <>
+                    {directIssues.length > 0 && (
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded border border-red-500/60 bg-red-500/15" />
+                        누락 {directIssues.length}
+                      </span>
+                    )}
+                    {inheritedIssues.length > 0 && (
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded border border-yellow-300/70 bg-yellow-400/15" />
+                        그룹 누락 {inheritedIssues.length}
+                      </span>
+                    )}
+                  </>
                 )}
                 {(panelTab === 'review' || panelTab === 'all') && reviewItems.length > 0 && (
                   <span className="flex items-center gap-1.5">
