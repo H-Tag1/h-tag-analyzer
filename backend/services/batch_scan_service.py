@@ -230,7 +230,7 @@ async def _assemble_page_data(
         page_url=url,
     )
     issues = filter_dismissed_issues(issues, url)
-    excluded_items, issues = await build_page_excluded_items(
+    excluded_items, issues, tracked_items = await build_page_excluded_items(
         url,
         elements,
         screenshot_id,

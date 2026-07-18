@@ -388,22 +388,13 @@ def _identify_exclusions_with_llm(
     return exclusions
 
 
-def _tracked_element_keys(tracked_items: List[TrackedAnalysisItem]) -> Set[str]:
-    return {
-        f"{item.element_selector}|{(item.element_text or '').strip()}"
-        for item in tracked_items
-    }
-
-
 def build_marketing_excluded_items(
     elements: List[PageElement],
     exclusion_map: Dict[int, str],
-    tracked_items: Optional[List[TrackedAnalysisItem]] = None,
 ) -> List[ExcludedAnalysisItem]:
     if not exclusion_map:
         return []
 
-    tracked_keys = _tracked_element_keys(tracked_items or [])
     items: List[ExcludedAnalysisItem] = []
     seen_keys: Set[str] = set()
 
@@ -413,7 +404,7 @@ def build_marketing_excluded_items(
             continue
 
         element_key = _element_key(element)
-        if element_key in tracked_keys or element_key in seen_keys:
+        if element_key in seen_keys:
             continue
 
         seen_keys.add(element_key)
@@ -446,6 +437,29 @@ def filter_issues_by_marketing_exclusions(
     removed = len(issues) - len(filtered)
     if removed:
         logger.info("Removed %d missing item(s) classified as marketing exclusions", removed)
+    return filtered
+
+
+def filter_tracked_by_marketing_exclusions(
+    tracked_items: List[TrackedAnalysisItem],
+    elements: List[PageElement],
+    exclusion_map: Dict[int, str],
+) -> List[TrackedAnalysisItem]:
+    if not exclusion_map:
+        return tracked_items
+
+    excluded_keys = {
+        _element_key(element)
+        for element in elements
+        if element.element_index in exclusion_map
+    }
+    filtered = [
+        item for item in tracked_items
+        if f"{item.element_selector}|{(item.element_text or '').strip()}" not in excluded_keys
+    ]
+    removed = len(tracked_items) - len(filtered)
+    if removed:
+        logger.info("Removed %d tracked item(s) classified as marketing exclusions", removed)
     return filtered
 
 
@@ -485,8 +499,9 @@ async def build_page_excluded_items(
     screenshot_id: str,
     tracked_items: List[TrackedAnalysisItem],
     issues: List[AiAnalysisItem],
-) -> Tuple[List[ExcludedAnalysisItem], List[AiAnalysisItem]]:
+) -> Tuple[List[ExcludedAnalysisItem], List[AiAnalysisItem], List[TrackedAnalysisItem]]:
     exclusion_map = await resolve_marketing_exclusions(page_url, elements, screenshot_id)
-    excluded_items = build_marketing_excluded_items(elements, exclusion_map, tracked_items)
+    excluded_items = build_marketing_excluded_items(elements, exclusion_map)
     filtered_issues = filter_issues_by_marketing_exclusions(issues, elements, exclusion_map)
-    return excluded_items, filtered_issues
+    filtered_tracked = filter_tracked_by_marketing_exclusions(tracked_items, elements, exclusion_map)
+    return excluded_items, filtered_issues, filtered_tracked

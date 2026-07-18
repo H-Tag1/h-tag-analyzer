@@ -32,8 +32,10 @@ NAVIGATION_LOCK_INIT_SCRIPT = """
             return;
         }
 
+        // preventDefault로 href 이동만 막고 stopPropagation은 걸지 않는다.
+        // stopPropagation을 걸면 사이트의 GA 클릭 핸들러(이벤트 위임)까지 차단되어
+        // 링크의 GA 이벤트가 발생하지 않는다. JS 기반 이동은 네트워크 라우트 가드가 차단한다.
         event.preventDefault();
-        event.stopPropagation();
     }, true);
 
     document.addEventListener('submit', (event) => {
