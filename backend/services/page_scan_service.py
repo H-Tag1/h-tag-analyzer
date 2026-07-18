@@ -484,7 +484,7 @@ async def _collect_elements(
 
         """ + HAMBURGER_MENU_FILTER_JS + """
 
-        return Array.from(document.querySelectorAll('button, a, [onclick], input[type="submit"], input[type="button"]'))
+        const collected = Array.from(document.querySelectorAll('button, a, [onclick], input[type="submit"], input[type="button"]'))
             .map((el, domIndex) => {
                 const rect = getVisualRect(el);
                 const style = window.getComputedStyle(el);
@@ -493,6 +493,16 @@ async def _collect_elements(
                 const scrollX = window.scrollX || window.pageXOffset || 0;
                 const scrollY = window.scrollY || window.pageYOffset || 0;
                 const staticTrackingSignals = collectSignals(el);
+                // self-hit-test: 요소 중심점이 자기 자신(또는 자식)을 반환하지 않으면
+                // 다른 요소에 가려진 것 (예: 스티키 헤더의 화면에 안 보이는 중복 nav).
+                let occluded = false;
+                const cx = Math.round(rect.x + rect.width / 2);
+                const cy = Math.round(rect.y + rect.height / 2);
+                if (rect.width > 0 && rect.height > 0 &&
+                    cx >= 0 && cy >= 0 && cx < window.innerWidth && cy < window.innerHeight) {
+                    const hit = document.elementFromPoint(cx, cy);
+                    occluded = !(hit && (hit === el || el.contains(hit)));
+                }
                 return {
                     dom_index: domIndex,
                     visible: isVisible(el, rect, style),
@@ -506,6 +516,9 @@ async def _collect_elements(
                         width: rect.width,
                         height: rect.height,
                     },
+                    render_box: null,
+                    _occluded: occluded,
+                    _viewport_y: rect.y,
                     static_tracking_signals: staticTrackingSignals,
                     has_ga_tag: staticTrackingSignals.length > 0,
                     in_persistent_navigation: Boolean(
@@ -516,7 +529,36 @@ async def _collect_elements(
                     request_rule_selectors: rules.map(rule => rule.selector),
                     request_candidate_key: buildCandidateKey(el, rules, text),
                 };
-            })
+            });
+
+        // 가려진 중복 요소의 오버레이 박스를, 같은 text/type의 "보이는 쌍둥이" 위치로 교정한다.
+        // 원본 bounding_box는 그대로 두고 render_box에만 기록하므로 그룹핑/분류 로직엔 영향이 없다.
+        const OCCLUDED_TWIN_MAX_DISTANCE_PX = 200;
+        collected.forEach((item) => {
+            if (!item._occluded || !item.text) return;
+            let best = null;
+            let bestDistance = Infinity;
+            for (const twin of collected) {
+                if (twin === item || twin._occluded) continue;
+                if (twin.text !== item.text || twin.element_type !== item.element_type) continue;
+                const distance = Math.abs(twin._viewport_y - item._viewport_y);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    best = twin;
+                }
+            }
+            if (best && bestDistance < OCCLUDED_TWIN_MAX_DISTANCE_PX) {
+                item.render_box = {
+                    x: best.bounding_box.x,
+                    y: best.bounding_box.y,
+                    width: best.bounding_box.width,
+                    height: best.bounding_box.height,
+                };
+            }
+        });
+
+        return collected
+            .map(({ _occluded, _viewport_y, ...item }) => item)
             .filter(item => (
                 verificationOnly
                     ? item.request_rule_ids.length > 0
@@ -551,11 +593,18 @@ async def _collect_elements(
             and float(bb_data.get("width") or 0) > 0
             and float(bb_data.get("height") or 0) > 0
         )
+        render_bb_data = item.get("render_box")
+        has_render_box = bool(
+            render_bb_data
+            and float(render_bb_data.get("width") or 0) > 0
+            and float(render_bb_data.get("height") or 0) > 0
+        )
         elements.append(PageElement(
             selector=item["selector"],
             text=item.get("text") or None,
             element_type=item["element_type"],
             bounding_box=BoundingBox(**bb_data) if has_visible_box else None,
+            render_box=BoundingBox(**render_bb_data) if has_render_box else None,
             element_index=item.get("element_index", 0),
             has_ga_tag=item.get("has_ga_tag", False),
             static_tracking_signals=parse_static_signals(item.get("static_tracking_signals", [])),
@@ -1101,20 +1150,21 @@ def _shift_elements_to_screenshot(
     offset_y: float,
     screenshot_height: int,
 ) -> List[PageElement]:
-    for element in elements:
-        if not element.bounding_box:
-            continue
-
-        box = element.bounding_box
+    def _shift_box(box: BoundingBox) -> BoundingBox:
         top = max(box.y - offset_y, 0.0)
         bottom = min(box.y + box.height - offset_y, float(screenshot_height))
-        height = max(bottom - top, 0.0)
-        element.bounding_box = BoundingBox(
+        return BoundingBox(
             x=box.x,
             y=top,
             width=box.width,
-            height=height,
+            height=max(bottom - top, 0.0),
         )
+
+    for element in elements:
+        if element.bounding_box:
+            element.bounding_box = _shift_box(element.bounding_box)
+        if element.render_box:
+            element.render_box = _shift_box(element.render_box)
     return elements
 
 

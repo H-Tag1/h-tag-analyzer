@@ -214,6 +214,31 @@ async def _scan_authenticated_single(
     )
 
 
+def _apply_render_box_corrections(elements, *item_lists) -> None:
+    """가려진 중복 요소(예: 스티키 헤더의 숨은 nav)의 오버레이 박스를, 화면에서 보이는
+    쌍둥이 위치(element.render_box)로 옮긴다. 그룹핑/분류/카운트는 이미 원본 bounding_box로
+    끝난 뒤이므로, 이 교정은 프론트로 나가는 렌더 좌표에만 영향을 준다."""
+    corrections: dict = {}
+    for element in elements:
+        render_box = getattr(element, "render_box", None)
+        box = getattr(element, "bounding_box", None)
+        if not render_box or not box:
+            continue
+        key = (round(box.x), round(box.y), round(box.width), round(box.height))
+        corrections[key] = render_box
+    if not corrections:
+        return
+    for items in item_lists:
+        for item in items:
+            box = item.bounding_box
+            if not box:
+                continue
+            key = (round(box.x), round(box.y), round(box.width), round(box.height))
+            corrected = corrections.get(key)
+            if corrected is not None:
+                item.bounding_box = corrected
+
+
 async def _assemble_page_data(
     url: str,
     screenshot_id: str,
@@ -238,6 +263,10 @@ async def _assemble_page_data(
         issues,
     )
     channel = resolve_channel_or_none(url)
+
+    _apply_render_box_corrections(
+        elements, tracked_items, issues, review_items, excluded_items
+    )
 
     return PageScanData(
         url=url,

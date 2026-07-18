@@ -9,6 +9,10 @@ class PageElement(BaseModel):
     text: Optional[str] = None
     element_type: str
     bounding_box: Optional[BoundingBox] = None
+    # 렌더링 전용 교정 좌표. 화면에서 가려진 중복 요소(예: 스티키 헤더의 숨은 nav)의
+    # 오버레이 박스를 보이는 쌍둥이 위치로 옮길 때만 채운다. 그룹핑/분류 등 로직은
+    # 항상 bounding_box(원본 DOM 좌표)를 사용하므로 이 필드는 로직에 영향을 주지 않는다.
+    render_box: Optional[BoundingBox] = None
     element_index: int = 0
     has_ga_tag: bool = False
     static_tracking_signals: List[ElementTrackingSignal] = Field(default_factory=list)
