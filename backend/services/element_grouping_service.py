@@ -8,6 +8,7 @@ from models.ai_analysis_item import AiAnalysisItem
 from models.page_element import PageElement
 from models.tracked_analysis_item import TrackedAnalysisItem
 from services.click_optimization_service import apply_llm_click_clustering
+from services.hamburger_menu_filter import is_hamburger_drawer_element
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,22 @@ def _normalize_label(text: Optional[str]) -> str:
     if not text:
         return ""
     return re.sub(r"\s+", "", text.strip())
+
+
+def _structure_group_members_compatible(members: List[PageElement]) -> bool:
+    drawer_flags = {bool(member.in_hamburger_drawer) for member in members}
+    if len(drawer_flags) > 1:
+        return False
+
+    ys = [member.bounding_box.y for member in members if member.bounding_box]
+    if ys and max(ys) - min(ys) > LAYOUT_ROW_TOLERANCE_PX:
+        return False
+
+    labels = {_normalize_label(member.text) for member in members if _normalize_label(member.text)}
+    if len(labels) > 1:
+        return False
+
+    return True
 
 
 def _pick_representative_index(members: List[PageElement]) -> int:
@@ -66,6 +83,8 @@ def _group_by_structure_key(elements: List[PageElement]) -> int:
     group_count = 0
     for key, members in buckets.items():
         if len(members) < MIN_GROUP_SIZE:
+            continue
+        if not _structure_group_members_compatible(members):
             continue
         representative_index = _pick_representative_index(members)
         group_id = f"structure:{key}"
@@ -124,6 +143,8 @@ def _group_by_selector_layout(elements: List[PageElement]) -> int:
             unique_members = [item for item in cluster if item.element_index not in seen_indices]
             if len(unique_members) < MIN_GROUP_SIZE:
                 continue
+            if not _structure_group_members_compatible(unique_members):
+                continue
             for item in unique_members:
                 seen_indices.add(item.element_index)
             representative_index = _pick_representative_index(unique_members)
@@ -170,6 +191,8 @@ async def apply_click_grouping_with_llm(elements: List[PageElement]) -> List[Pag
 def should_click_for_verification(element: PageElement) -> bool:
     if element.request_rule_ids:
         return True
+    if is_hamburger_drawer_element(element):
+        return False
     if not element.click_group_id:
         return True
     return element.click_group_representative
@@ -218,6 +241,8 @@ def propagate_group_click_results(elements: List[PageElement]) -> List[PageEleme
             if member.element_index == representative.element_index:
                 continue
             if member.request_rule_ids or member.click_tested:
+                continue
+            if _normalize_label(member.text) != _normalize_label(representative.text):
                 continue
 
             member.click_tested = representative.click_tested
@@ -326,6 +351,8 @@ def expand_grouped_overlay_results(
 
         for member in members:
             if member.element_index == representative.element_index:
+                continue
+            if is_hamburger_drawer_element(member):
                 continue
 
             member_key = _element_overlay_key(member)

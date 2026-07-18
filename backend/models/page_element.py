@@ -24,3 +24,6 @@ class PageElement(BaseModel):
     request_rule_selectors: List[str] = Field(default_factory=list)
     request_candidate_key: Optional[str] = None
     request_dom_index: int = -1
+    in_hamburger_drawer: bool = False
+    ga4common_tracking_required: Optional[bool] = None
+    ga4common_exclusion_reason: Optional[str] = None

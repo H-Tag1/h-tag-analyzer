@@ -18,7 +18,12 @@ def normalize_event_name(event_name: Optional[str]) -> Optional[str]:
 
 def is_ignored_ga_event_name(event_name: Optional[str]) -> bool:
     normalized = normalize_event_name(event_name)
-    return bool(normalized and normalized in IGNORED_GA_EVENT_NAMES)
+    if not normalized:
+        return False
+    if normalized in IGNORED_GA_EVENT_NAMES:
+        return True
+    # GTM 내부 자동 이벤트(gtm.click 등)는 커스텀 click_ 태깅 검증 대상이 아님
+    return normalized.startswith("gtm.")
 
 
 def extract_event_name_from_datalayer(event: Any) -> Optional[str]:

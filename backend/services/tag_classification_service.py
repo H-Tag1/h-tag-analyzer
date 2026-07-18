@@ -9,6 +9,7 @@ from models.tracked_analysis_item import TrackedAnalysisItem
 from services.tracking.event_normalizer import (
     EP_FIELDS,
     element_click_param_keys,
+    element_has_verified_click_tracking,
     event_name_from_dict,
     event_signature,
     extract_ep_params,
@@ -20,6 +21,8 @@ from services.tracking.event_normalizer import (
     params_from_event_dict,
     prefer_click_events,
 )
+from services.ga4_channel_service import resolve_channel_or_none
+from services.hamburger_menu_filter import is_hamburger_drawer_element
 from services.element_grouping_service import expand_grouped_overlay_results
 from services.hybrid_tag_judgment_service import (
     HybridTagJudgmentResolver,
@@ -35,6 +38,52 @@ EP_FIELD_LABELS = {
     "ep_button_name": "ep_button_name",
 }
 EMPTY_BOUNDING_BOX = BoundingBox(x=0, y=0, width=0, height=0)
+HEADER_DEFAULT_MENU_LABELS = frozenset({"검색", "장바구니", "마이현대"})
+HEADER_DEFAULT_MENU_MAX_Y = 160
+
+
+def _header_default_menu_event_name(channel_id: str) -> Optional[str]:
+    if channel_id.endswith("_pc"):
+        platform = "PC"
+    elif channel_id.endswith("_mo"):
+        platform = "MO"
+    else:
+        return None
+
+    lang_map = {"kr": "국문", "en": "영문", "cn": "중문"}
+    lang = lang_map.get(channel_id.split("_")[0])
+    if not lang:
+        return None
+    return f"click_{platform}_{lang}_공통"
+
+
+def _infer_header_default_menu_params(
+    page_url: Optional[str],
+    element: PageElement,
+) -> Optional[Dict[str, str]]:
+    if not page_url or not element.click_tested or not element.bounding_box:
+        return None
+    if element.bounding_box.y > HEADER_DEFAULT_MENU_MAX_Y:
+        return None
+
+    label = _normalize_label(element.text or "")
+    if label not in HEADER_DEFAULT_MENU_LABELS:
+        return None
+
+    channel = resolve_channel_or_none(page_url)
+    if not channel:
+        return None
+
+    event_name = _header_default_menu_event_name(channel.channel_id)
+    if not event_name:
+        return None
+
+    return {
+        "event_name": event_name,
+        "ep_button_area": "Header",
+        "ep_button_area2": "Header",
+        "ep_button_name": label,
+    }
 
 
 def classify_network_tags(
@@ -114,9 +163,30 @@ def classify_network_tags(
             classified_element_keys.add(_element_key(element))
 
     for element in elements or []:
+        element_key = _element_key(element)
+        if element_key in classified_element_keys:
+            continue
+        inferred = _infer_header_default_menu_params(page_url, element)
+        if not inferred:
+            continue
+        tracked_items.append(
+            _to_tracked_item(
+                element,
+                inferred["event_name"],
+                inferred,
+                "click_inferred",
+            )
+        )
+        classified_element_keys.add(element_key)
+
+    for element in elements or []:
         if not element.bounding_box or not element.click_tested:
             continue
-        if element.click_tracking_events:
+        if is_hamburger_drawer_element(element):
+            continue
+        if element.click_group_id and not element.click_group_representative:
+            continue
+        if element_has_verified_click_tracking(element):
             continue
 
         element_key = _element_key(element)

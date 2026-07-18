@@ -4,6 +4,7 @@ import type { AiAnalysisItem, GeneratedCodeSnapshot, PageScanData } from '../typ
 import ScreenshotOverlay from '../components/ScreenshotOverlay'
 import IssuePanel from '../components/IssuePanel'
 import TrackedPanel from '../components/TrackedPanel'
+import ExcludedPanel from '../components/ExcludedPanel'
 import AllTagsPanel from '../components/AllTagsPanel'
 import ReviewPanel from '../components/ReviewPanel'
 import { dismissIssue, issueIdentityKey } from '../utils/dismissedIssues'
@@ -22,7 +23,7 @@ interface Props {
   onGeneratedCodesChange?: (codes: GeneratedCodeSnapshot[]) => void
 }
 
-type PanelTab = 'missing' | 'review' | 'tracked' | 'all'
+type PanelTab = 'missing' | 'review' | 'tracked' | 'excluded' | 'all'
 
 export default function AnalysisPage({
   pages,
@@ -38,6 +39,7 @@ export default function AnalysisPage({
   const [selectedIssue, setSelectedIssue] = useState<number | null>(null)
   const [selectedReview, setSelectedReview] = useState<number | null>(null)
   const [selectedTracked, setSelectedTracked] = useState<number | null>(null)
+  const [selectedExcluded, setSelectedExcluded] = useState<number | null>(null)
   const [selectedAll, setSelectedAll] = useState<number | null>(null)
   const [sessionDismissedKeys, setSessionDismissedKeys] = useState<Set<string>>(new Set())
 
@@ -49,6 +51,7 @@ export default function AnalysisPage({
     ),
     [current.tracked_items],
   )
+  const excludedItems = current.excluded_items ?? []
   const networkTags = current.network_tags ?? []
   const visibleIssues = useMemo(
     () => current.issues.filter(issue => !sessionDismissedKeys.has(issueIdentityKey(issue))),
@@ -56,34 +59,58 @@ export default function AnalysisPage({
   )
   const isBatch = pages.length > 1
 
+  const clearSecondarySelections = () => {
+    setSelectedReview(null)
+    setSelectedExcluded(null)
+    setSelectedAll(null)
+  }
+
   const handlePageChange = (idx: number) => {
     setPageIdx(idx)
     setSelectedIssue(null)
     setSelectedReview(null)
     setSelectedTracked(null)
+    setSelectedExcluded(null)
     setSelectedAll(null)
     setSessionDismissedKeys(new Set())
   }
 
   const handleSelectIssue = (idx: number) => {
     setPanelTab('missing')
-    setSelectedReview(null)
     setSelectedTracked(null)
-    setSelectedAll(null)
+    clearSecondarySelections()
     setSelectedIssue(idx)
   }
 
   const handleSelectTracked = (idx: number) => {
     setPanelTab('tracked')
     setSelectedIssue(null)
+    clearSecondarySelections()
+    setSelectedTracked(idx)
+  }
+
+  const handleSelectReview = (idx: number) => {
+    setPanelTab('review')
+    setSelectedIssue(null)
+    setSelectedTracked(null)
+    setSelectedExcluded(null)
+    setSelectedAll(null)
+    setSelectedReview(idx)
+  }
+
+  const handleSelectExcluded = (idx: number) => {
+    setPanelTab('excluded')
+    setSelectedIssue(null)
+    setSelectedTracked(null)
     setSelectedReview(null)
     setSelectedAll(null)
-    setSelectedTracked(idx)
+    setSelectedExcluded(idx)
   }
 
   const handlePanelSelectTracked = (idx: number) => {
     setSelectedIssue(null)
     setSelectedReview(null)
+    setSelectedExcluded(null)
     setSelectedAll(null)
     setSelectedTracked(prev => (prev === idx ? null : idx))
   }
@@ -91,6 +118,7 @@ export default function AnalysisPage({
   const handlePanelSelectIssue = (idx: number) => {
     setSelectedTracked(null)
     setSelectedReview(null)
+    setSelectedExcluded(null)
     setSelectedAll(null)
     if (idx < 0) {
       setSelectedIssue(null)
@@ -99,19 +127,20 @@ export default function AnalysisPage({
     setSelectedIssue(prev => (prev === idx ? null : idx))
   }
 
-  const handleSelectReview = (idx: number) => {
-    setPanelTab('review')
-    setSelectedIssue(null)
-    setSelectedTracked(null)
-    setSelectedAll(null)
-    setSelectedReview(idx)
-  }
-
   const handlePanelSelectReview = (idx: number) => {
     setSelectedIssue(null)
     setSelectedTracked(null)
+    setSelectedExcluded(null)
     setSelectedAll(null)
     setSelectedReview(prev => (prev === idx ? null : idx))
+  }
+
+  const handlePanelSelectExcluded = (idx: number) => {
+    setSelectedIssue(null)
+    setSelectedTracked(null)
+    setSelectedReview(null)
+    setSelectedAll(null)
+    setSelectedExcluded(prev => (prev === idx ? null : idx))
   }
 
   const handleDismissIssue = async (issue: AiAnalysisItem, tag: TagSpec) => {
@@ -127,6 +156,7 @@ export default function AnalysisPage({
   const overlayIssues = panelTab === 'missing' || panelTab === 'all' ? visibleIssues : []
   const overlayReviewItems = panelTab === 'review' || panelTab === 'all' ? reviewItems : []
   const overlayTrackedItems = panelTab === 'tracked' || panelTab === 'all' ? interactiveTrackedItems : []
+  const overlayExcludedItems = panelTab === 'excluded' || panelTab === 'all' ? excludedItems : []
 
   const handlePanelTabChange = (tab: PanelTab) => {
     setPanelTab(tab)
@@ -134,16 +164,24 @@ export default function AnalysisPage({
     if (tab === 'missing') {
       setSelectedTracked(null)
       setSelectedReview(null)
+      setSelectedExcluded(null)
     } else if (tab === 'review') {
       setSelectedIssue(null)
       setSelectedTracked(null)
+      setSelectedExcluded(null)
     } else if (tab === 'tracked') {
       setSelectedIssue(null)
       setSelectedReview(null)
+      setSelectedExcluded(null)
+    } else if (tab === 'excluded') {
+      setSelectedIssue(null)
+      setSelectedReview(null)
+      setSelectedTracked(null)
     } else {
       setSelectedIssue(null)
       setSelectedReview(null)
       setSelectedTracked(null)
+      setSelectedExcluded(null)
     }
   }
 
@@ -196,6 +234,7 @@ export default function AnalysisPage({
           <span className="text-emerald-400 font-medium">정상 {interactiveTrackedItems.length}건</span>
           <span className="text-red-400 font-medium">누락 {visibleIssues.length}건</span>
           <span className="text-amber-400 font-medium">확인 {reviewItems.length}건</span>
+          <span className="text-orange-400 font-medium">예외 {excludedItems.length}건</span>
         </div>
       </div>
 
@@ -228,6 +267,9 @@ export default function AnalysisPage({
               {(p.review_items?.length ?? 0) > 0 && (
                 <span className="ml-1 text-amber-400">({p.review_items?.length})</span>
               )}
+              {(p.excluded_items?.length ?? 0) > 0 && (
+                <span className="ml-1 text-orange-400">({p.excluded_items?.length})</span>
+              )}
             </button>
           ))}
         </div>
@@ -254,7 +296,13 @@ export default function AnalysisPage({
                 {(panelTab === 'review' || panelTab === 'all') && reviewItems.length > 0 && (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2.5 h-2.5 rounded border border-amber-500/60 bg-amber-500/15" />
-                    확인 필요 {reviewItems.length}
+                    확인 {reviewItems.length}
+                  </span>
+                )}
+                {(panelTab === 'excluded' || panelTab === 'all') && excludedItems.length > 0 && (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded border border-orange-500/60 bg-orange-500/15" />
+                    예외 {excludedItems.length}
                   </span>
                 )}
               </div>
@@ -271,23 +319,26 @@ export default function AnalysisPage({
                 issues={overlayIssues}
                 reviewItems={overlayReviewItems}
                 trackedItems={overlayTrackedItems}
+                excludedItems={overlayExcludedItems}
                 selectedIssueIndex={panelTab === 'missing' || panelTab === 'all' ? selectedIssue : null}
                 selectedReviewIndex={panelTab === 'review' || panelTab === 'all' ? selectedReview : null}
                 selectedTrackedIndex={panelTab === 'tracked' || panelTab === 'all' ? selectedTracked : null}
+                selectedExcludedIndex={panelTab === 'excluded' || panelTab === 'all' ? selectedExcluded : null}
                 scrollContainerRef={captureScrollRef}
                 onSelectIssue={handleSelectIssue}
                 onSelectReview={handleSelectReview}
                 onSelectTracked={handleSelectTracked}
+                onSelectExcluded={handleSelectExcluded}
               />
             </div>
           </div>
         </div>
 
         <div className="w-80 flex-shrink-0 border-l border-[#2A2A2A] bg-[#111] flex flex-col min-h-0 overflow-hidden">
-          <div className="flex border-b border-[#2A2A2A]">
+          <div className="flex border-b border-[#2A2A2A] overflow-x-auto">
             <button
               onClick={() => handlePanelTabChange('all')}
-              className={`flex-1 px-3 py-2.5 text-xs font-medium transition-colors ${
+              className={`flex-shrink-0 px-2 py-2.5 text-[11px] font-medium transition-colors ${
                 panelTab === 'all'
                   ? 'text-white border-b-2 border-blue-400'
                   : 'text-[#52525B] hover:text-[#A1A1AA]'
@@ -297,7 +348,7 @@ export default function AnalysisPage({
             </button>
             <button
               onClick={() => handlePanelTabChange('missing')}
-              className={`flex-1 px-3 py-2.5 text-xs font-medium transition-colors ${
+              className={`flex-shrink-0 px-2 py-2.5 text-[11px] font-medium transition-colors ${
                 panelTab === 'missing'
                   ? 'text-white border-b-2 border-red-400'
                   : 'text-[#52525B] hover:text-[#A1A1AA]'
@@ -307,7 +358,7 @@ export default function AnalysisPage({
             </button>
             <button
               onClick={() => handlePanelTabChange('tracked')}
-              className={`flex-1 px-3 py-2.5 text-xs font-medium transition-colors ${
+              className={`flex-shrink-0 px-2 py-2.5 text-[11px] font-medium transition-colors ${
                 panelTab === 'tracked'
                   ? 'text-white border-b-2 border-emerald-400'
                   : 'text-[#52525B] hover:text-[#A1A1AA]'
@@ -317,13 +368,23 @@ export default function AnalysisPage({
             </button>
             <button
               onClick={() => handlePanelTabChange('review')}
-              className={`flex-1 px-1 py-2.5 text-[11px] font-medium transition-colors ${
+              className={`flex-shrink-0 px-2 py-2.5 text-[11px] font-medium transition-colors ${
                 panelTab === 'review'
                   ? 'text-white border-b-2 border-amber-400'
                   : 'text-[#52525B] hover:text-[#A1A1AA]'
               }`}
             >
               확인 ({reviewItems.length})
+            </button>
+            <button
+              onClick={() => handlePanelTabChange('excluded')}
+              className={`flex-shrink-0 px-2 py-2.5 text-[11px] font-medium transition-colors ${
+                panelTab === 'excluded'
+                  ? 'text-white border-b-2 border-orange-400'
+                  : 'text-[#52525B] hover:text-[#A1A1AA]'
+              }`}
+            >
+              예외 ({excludedItems.length})
             </button>
           </div>
 
@@ -357,12 +418,20 @@ export default function AnalysisPage({
                 onSelect={handlePanelSelectReview}
               />
             </div>
-          ) : (
+          ) : panelTab === 'tracked' ? (
             <div className="flex-1 min-h-0 overflow-hidden">
               <TrackedPanel
                 trackedItems={interactiveTrackedItems}
                 selectedIndex={selectedTracked}
                 onSelect={handlePanelSelectTracked}
+              />
+            </div>
+          ) : (
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <ExcludedPanel
+                excludedItems={excludedItems}
+                selectedIndex={selectedExcluded}
+                onSelect={handlePanelSelectExcluded}
               />
             </div>
           )}

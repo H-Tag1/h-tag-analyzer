@@ -25,7 +25,7 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [passwordVisible, setPasswordVisible] = useState(false)
-  const [scanRangePreset, setScanRangePreset] = useState<ScanRangePreset>('top2')
+  const [scanRangePreset, setScanRangePreset] = useState<ScanRangePreset>('full')
   const [customStartY, setCustomStartY] = useState('0')
   const [customEndY, setCustomEndY] = useState('1800')
   const [history] = useState<string[]>(() => {

@@ -24,6 +24,13 @@ export interface TrackedAnalysisItem {
   detection_methods?: string[]
 }
 
+export interface ExcludedAnalysisItem {
+  element_selector: string
+  element_text: string
+  bounding_box: BoundingBox
+  exclusion_reason: string
+}
+
 export interface NetworkTagDisplayField {
   label: string
   value: string
@@ -51,6 +58,7 @@ export interface PageScanData {
   issues: AiAnalysisItem[]
   review_items?: AiAnalysisItem[]
   tracked_items: TrackedAnalysisItem[]
+  excluded_items?: ExcludedAnalysisItem[]
   network_tags?: NetworkTagHit[]
 }
 
