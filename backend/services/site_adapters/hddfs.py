@@ -91,7 +91,7 @@ async def goto_scan_target(page: Page, url: str) -> None:
         except PlaywrightTimeoutError:
             pass
 
-    await page.wait_for_timeout(1000)
+    await page.wait_for_timeout(700)
     await _raise_if_web_firewall_blocked(page)
 
 
@@ -127,7 +127,7 @@ async def ensure_target_page(page: Page, target_url: str) -> None:
     except PlaywrightTimeoutError:
         pass
 
-    await page.wait_for_timeout(1000)
+    await page.wait_for_timeout(700)
     await _raise_if_web_firewall_blocked(page)
 
     if "mbshAuca/addLgin" in page.url:
@@ -146,14 +146,14 @@ async def ensure_target_page(page: Page, target_url: str) -> None:
         except PlaywrightTimeoutError:
             pass
 
-    await page.wait_for_timeout(1000)
+    await page.wait_for_timeout(700)
     await _raise_if_web_firewall_blocked(page)
 
 
 async def _login_pc(page: Page, target_url: str, credentials: ScanLoginCredentials) -> None:
     page.on("dialog", _accept_dialog)
     await page.goto(target_url, wait_until="load", timeout=60000)
-    await page.wait_for_timeout(1000)
+    await page.wait_for_timeout(700)
     await _raise_if_web_firewall_blocked(page)
 
     login_page = await _open_pc_login_page(page, target_url)

@@ -75,7 +75,7 @@ async def collect_page_data(
                 await _login_hddfs(page, url, login)
             else:
                 await page.goto(url, wait_until="load", timeout=60000)
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(700)
             collector.reset()
 
             return await _scan_current_page(
@@ -114,7 +114,7 @@ async def collect_page_data_with_clean_capture(
             await collector.start()
 
             await _goto_scan_target(tracking_page, url)
-            await tracking_page.wait_for_timeout(500)
+            await tracking_page.wait_for_timeout(300)
             await _mark_persistent_navigation(tracking_page)
             await _report_progress(progress, {"type": "page_loaded"})
             collector.reset()
@@ -137,7 +137,7 @@ async def collect_page_data_with_clean_capture(
             await _report_progress(progress, {"type": "capture_start"})
             capture_page = await _new_scan_page(browser, url)
             await _goto_scan_target(capture_page, url)
-            await capture_page.wait_for_timeout(500)
+            await capture_page.wait_for_timeout(300)
             await _prepare_capture_page(capture_page, scan_range)
             await _mark_persistent_navigation(capture_page)
 
@@ -188,7 +188,7 @@ async def collect_authenticated_page_data(
     await collector.start()
     try:
         await _goto_scan_target(page, url)
-        await page.wait_for_timeout(1500)
+        await page.wait_for_timeout(1000)
         collector.reset()
 
         return await _scan_current_page(
@@ -217,13 +217,14 @@ async def _scan_current_page(
     scan_range: Optional[ScanRange] = None,
     progress: Optional[ProgressReporter] = None,
 ) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]], List[NetworkTagHit]]:
-    elements, datalayer, network_tags = await _collect_tracking_data(
-        page=page,
-        page_url=page_url,
-        collector=collector,
+    # 클릭 검사는 상단 레이어를 닫으며 페이지를 이동시켜, 클릭 전에 측정한 좌표가
+    # 클릭 후 스크린샷과 어긋나게 만든다. 이를 막기 위해 좌표 수집과 스크린샷을
+    # 클릭 검사 이전, 동일한 초기 레이아웃에서 연속 수행한다. 이후 클릭 검사는
+    # 그 좌표에 추적 결과만 주석으로 달 뿐 좌표를 재측정하지 않으므로 정합이 유지된다.
+    elements = await _collect_elements(
+        page,
         exclude_auth_actions=exclude_auth_actions,
         scan_range=scan_range,
-        progress=progress,
     )
     screenshot_id, width, height, screenshot_offset_y = await _take_screenshot(page, scan_range)
     await _report_progress(progress, {
@@ -232,6 +233,15 @@ async def _scan_current_page(
         "width": width,
         "height": height,
     })
+    elements, datalayer, network_tags = await _collect_tracking_data(
+        page=page,
+        page_url=page_url,
+        collector=collector,
+        exclude_auth_actions=exclude_auth_actions,
+        scan_range=scan_range,
+        progress=progress,
+        elements=elements,
+    )
     elements = _shift_elements_to_screenshot(elements, screenshot_offset_y, height)
 
     return screenshot_id, width, height, elements, datalayer, network_tags
@@ -247,16 +257,18 @@ async def _collect_tracking_data(
     progress: Optional[ProgressReporter] = None,
     verification_rules: Optional[List[Dict[str, str]]] = None,
     verification_only: bool = False,
+    elements: Optional[List[PageElement]] = None,
 ) -> Tuple[List[PageElement], List[Dict[str, Any]], List[NetworkTagHit]]:
-    elements = await _collect_elements(
-        page,
-        exclude_auth_actions=exclude_auth_actions,
-        exclude_persistent_navigation=exclude_persistent_navigation,
-        scan_range=scan_range,
-        verification_rules=verification_rules,
-        include_hidden_rule_matches=bool(verification_rules),
-        verification_only=verification_only,
-    )
+    if elements is None:
+        elements = await _collect_elements(
+            page,
+            exclude_auth_actions=exclude_auth_actions,
+            exclude_persistent_navigation=exclude_persistent_navigation,
+            scan_range=scan_range,
+            verification_rules=verification_rules,
+            include_hidden_rule_matches=bool(verification_rules),
+            verification_only=verification_only,
+        )
     elements = await apply_click_grouping_with_llm(elements)
     grouped_count = sum(1 for element in elements if element.click_group_id)
     representative_count = sum(1 for element in elements if element.click_group_representative)
@@ -423,9 +435,43 @@ async def _collect_elements(
             ].join('|').replace(/\s+/g, '').slice(0, 600);
         }
 
+        function getVisualRect(el) {
+            const base = el.getBoundingClientRect();
+            const baseHasArea = base.width > 0 && base.height > 0;
+            // 텍스트/자식 rect는 요소 자체 rect 안에 있을 때만 채택한다.
+            // (버튼의 sr-only 라벨처럼 화면 밖에 배치된 숨은 텍스트를 잡아
+            //  박스가 엉뚱한 위치에 그려지는 것을 방지)
+            // 단, 요소 자체가 0×0인 래퍼(display:contents 등)면 자식 rect로 대체한다.
+            const accept = (r) => (
+                r.width > 0 && r.height > 0 && (
+                    !baseHasArea || (
+                        r.left >= base.left - 1 && r.top >= base.top - 1 &&
+                        r.right <= base.right + 1 && r.bottom <= base.bottom + 1
+                    )
+                )
+            );
+            for (const child of el.childNodes) {
+                if (child.nodeType === 3 && child.textContent.trim()) {
+                    try {
+                        const range = document.createRange();
+                        range.selectNode(child);
+                        const r = range.getBoundingClientRect();
+                        if (accept(r)) return r;
+                    } catch(_e) {}
+                }
+            }
+            for (const child of el.children) {
+                const childStyle = window.getComputedStyle(child);
+                if (childStyle.display === 'none' || childStyle.visibility === 'hidden') continue;
+                const r = child.getBoundingClientRect();
+                if (accept(r)) return r;
+            }
+            return base;
+        }
+
         return Array.from(document.querySelectorAll('button, a, [onclick], input[type="submit"], input[type="button"]'))
             .map((el, domIndex) => {
-                const rect = el.getBoundingClientRect();
+                const rect = getVisualRect(el);
                 const style = window.getComputedStyle(el);
                 const rules = matchingRules(el);
                 const text = elementText(el);
@@ -758,52 +804,17 @@ def _crop_screenshot_layer(
 
 
 async def _prepare_capture_page(page: Page, scan_range: Optional[ScanRange]) -> None:
+    # 캡처 전 준비: 폰트 로딩 대기 후 최상단 정렬만 수행한다.
+    # 팝업 닫기/전체 스크롤은 캐러셀·무한스크롤 목록을 가상화(off-screen DOM 제거)시켜
+    # 좌표 수집 대상 요소를 대량 소실시킨다(실측: 339→112). 그 결과 추적 요소가
+    # 표시용 요소와 매칭되지 않아 오버레이 박스가 대량 누락된다. full_page 스크린샷은
+    # 스크롤 없이도 페이지 전체를 캡처하므로 스크롤이 불필요하다.
     try:
         await page.evaluate("() => document.fonts?.ready || Promise.resolve()")
     except Exception:
         pass
 
-    if not scan_range or scan_range.preset != "full":
-        await page.evaluate("() => window.scrollTo(0, 0)")
-        return
-
-    try:
-        await page.evaluate("""async () => {
-            const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-            const pageHeight = () => Math.max(
-                document.documentElement?.scrollHeight || 0,
-                document.body?.scrollHeight || 0,
-                window.innerHeight || 0
-            );
-            const viewportHeight = Math.max(window.innerHeight || 0, 1);
-            let y = 0;
-            let stableBottomPasses = 0;
-
-            for (let step = 0; step < 60; step++) {
-                const heightBefore = pageHeight();
-                const bottom = Math.max(heightBefore - viewportHeight, 0);
-                y = Math.min(y + Math.max(viewportHeight * 0.8, 320), bottom);
-                window.scrollTo(0, y);
-                await wait(80);
-
-                const heightAfter = pageHeight();
-                if (y >= bottom && heightAfter <= heightBefore) {
-                    stableBottomPasses += 1;
-                    if (stableBottomPasses >= 2) break;
-                } else {
-                    stableBottomPasses = 0;
-                }
-            }
-
-            window.scrollTo(0, 0);
-            await wait(300);
-        }""")
-        await page.wait_for_function(
-            "() => Array.from(document.images).every((image) => image.complete)",
-            timeout=3000,
-        )
-    except Exception:
-        await page.evaluate("() => window.scrollTo(0, 0)")
+    await page.evaluate("() => window.scrollTo(0, 0)")
 
 
 async def _take_capture_screenshots(
@@ -1096,7 +1107,7 @@ async def discover_links(url: str, max_pages: int = 20) -> List[str]:
         try:
             page = await _new_scan_page(browser, url)
             await page.goto(url, wait_until="load", timeout=60000)
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(700)
 
             hrefs = await page.evaluate("""() =>
                 Array.from(document.querySelectorAll('a[href]'))
@@ -1126,7 +1137,7 @@ async def discover_links_from_page(page: Page, url: str, max_pages: int = 20) ->
     base_domain = f"{parsed.scheme}://{parsed.netloc}"
 
     await _goto_scan_target(page, url)
-    await page.wait_for_timeout(1500)
+    await page.wait_for_timeout(700)
 
     hrefs = await page.evaluate("""() =>
         Array.from(document.querySelectorAll('a[href]'))

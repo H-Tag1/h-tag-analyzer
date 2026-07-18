@@ -10,11 +10,11 @@ interface Props {
 }
 
 const HISTORY_KEY = 'htag_url_history'
-const SCAN_RANGE_OPTIONS: { value: ScanRangePreset; label: string }[] = [
-  { value: 'viewport', label: '현재 화면' },
-  { value: 'top2', label: '상단 영역' },
-  { value: 'full', label: '전체 페이지' },
-  { value: 'custom', label: '구간 지정' },
+const SCAN_RANGE_OPTIONS: { value: ScanRangePreset; label: string; speed: string; speedColor: string; description: string }[] = [
+  { value: 'viewport', label: '현재 화면', speed: '빠름', speedColor: 'text-green-400', description: '스크롤 없이 보이는 영역만 검사합니다.' },
+  { value: 'top2', label: '상단 영역', speed: '보통', speedColor: 'text-yellow-400', description: '화면 높이 2배까지 검사합니다. 일반적으로 권장합니다.' },
+  { value: 'full', label: '전체 페이지', speed: '느림', speedColor: 'text-red-400', description: '페이지 전체를 검사합니다. 요소가 많으면 오래 걸릴 수 있습니다.' },
+  { value: 'custom', label: '구간 지정', speed: '설정', speedColor: 'text-blue-400', description: '검사할 세로 구간을 직접 입력합니다. 1화면 ≈ 900px 기준입니다.' },
 ]
 
 export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
@@ -148,39 +148,58 @@ export default function InputPage({ onStart, onBack, layout = 'page' }: Props) {
                 key={item.value}
                 type="button"
                 onClick={() => setScanRangePreset(item.value)}
-                className={`rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+                className={`rounded-lg px-3 py-2 text-sm font-medium transition-all flex flex-col items-center gap-0.5 ${
                   scanRangePreset === item.value
                     ? 'bg-purple-600 text-white'
                     : 'text-[#71717A] hover:bg-white/[0.04] hover:text-white'
                 }`}
               >
-                {item.label}
+                <span>{item.label}</span>
+                <span className={`text-[10px] font-normal ${scanRangePreset === item.value ? 'text-white/70' : item.speedColor}`}>
+                  {item.speed}
+                </span>
               </button>
             ))}
           </div>
 
+          <p className="mt-1.5 text-xs text-[#71717A]">
+            {SCAN_RANGE_OPTIONS.find(o => o.value === scanRangePreset)?.description}
+          </p>
+
           {scanRangePreset === 'custom' && (
-            <div className="mt-2 grid gap-2 md:grid-cols-2">
-              <input
-                type="number"
-                min="0"
-                value={customStartY}
-                onChange={e => setCustomStartY(e.target.value)}
-                placeholder="시작 Y(px)"
-                className="w-full rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] px-3 py-3 text-sm text-white placeholder-[#52525B] transition-all focus:border-purple-600 focus:outline-none focus:ring-1 focus:ring-purple-600"
-              />
-              <input
-                type="number"
-                min="1"
-                value={customEndY}
-                onChange={e => setCustomEndY(e.target.value)}
-                placeholder="종료 Y(px)"
-                className="w-full rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] px-3 py-3 text-sm text-white placeholder-[#52525B] transition-all focus:border-purple-600 focus:outline-none focus:ring-1 focus:ring-purple-600"
-              />
+            <div className="mt-2">
+              <div className="grid gap-2 md:grid-cols-2">
+                <div>
+                  <input
+                    type="number"
+                    min="0"
+                    value={customStartY}
+                    onChange={e => setCustomStartY(e.target.value)}
+                    placeholder="시작 위치 (px)"
+                    className="w-full rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] px-3 py-3 text-sm text-white placeholder-[#52525B] transition-all focus:border-purple-600 focus:outline-none focus:ring-1 focus:ring-purple-600"
+                  />
+                  <p className="mt-1 text-xs text-[#52525B]">
+                    {Number(customStartY) > 0 ? `약 ${(Number(customStartY) / 900).toFixed(1)}화면 아래` : '페이지 최상단'}
+                  </p>
+                </div>
+                <div>
+                  <input
+                    type="number"
+                    min="1"
+                    value={customEndY}
+                    onChange={e => setCustomEndY(e.target.value)}
+                    placeholder="종료 위치 (px)"
+                    className="w-full rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] px-3 py-3 text-sm text-white placeholder-[#52525B] transition-all focus:border-purple-600 focus:outline-none focus:ring-1 focus:ring-purple-600"
+                  />
+                  <p className="mt-1 text-xs text-[#52525B]">
+                    {Number(customEndY) > 0 ? `약 ${(Number(customEndY) / 900).toFixed(1)}화면 아래까지` : ''}
+                  </p>
+                </div>
+              </div>
             </div>
           )}
           {isCustomRangeInvalid && (
-            <p className="mt-1.5 text-xs text-red-400">종료 Y는 시작 Y보다 커야 합니다</p>
+            <p className="mt-1.5 text-xs text-red-400">종료 위치는 시작 위치보다 커야 합니다</p>
           )}
         </div>
 

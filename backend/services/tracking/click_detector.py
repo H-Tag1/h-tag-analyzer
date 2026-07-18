@@ -21,7 +21,7 @@ from services.element_grouping_service import (
 logger = logging.getLogger(__name__)
 ProgressReporter = Callable[[Dict[str, Any]], Awaitable[None]]
 
-CLICK_EVENT_WAIT_MS = 1200
+CLICK_EVENT_WAIT_MS = 800
 CLICK_EVENT_POLL_MS = 100
 
 ELEMENT_QUERY_JS = """
@@ -434,14 +434,14 @@ async def _restore_initial_click_state(page: Page, scan_url: str, initial_url: s
 
     try:
         await page.goto(initial_url, wait_until="load", timeout=30000)
-        await page.wait_for_timeout(500)
+        await page.wait_for_timeout(300)
         return
     except Exception:
         pass
 
     try:
         await page.goto(scan_url, wait_until="load", timeout=30000)
-        await page.wait_for_timeout(500)
+        await page.wait_for_timeout(300)
     except Exception as exc:
         logger.warning("Failed to restore initial page before click: %s", exc)
 
@@ -449,7 +449,7 @@ async def _restore_initial_click_state(page: Page, scan_url: str, initial_url: s
 async def _close_click_side_effects(page: Page) -> None:
     try:
         await page.keyboard.press("Escape")
-        await page.wait_for_timeout(100)
+        await page.wait_for_timeout(50)
     except Exception:
         pass
 
@@ -523,7 +523,7 @@ async def _close_click_side_effects(page: Page) -> None:
             return true;
         }""")
         if closed:
-            await page.wait_for_timeout(200)
+            await page.wait_for_timeout(100)
     except Exception:
         pass
 

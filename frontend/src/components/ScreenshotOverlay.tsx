@@ -137,9 +137,11 @@ export default function ScreenshotOverlay({
                   : 'bg-emerald-500/15 border border-emerald-500/60 hover:bg-emerald-500/25 z-10'
               }`}
             >
-              <span className="absolute -top-5 left-0 text-[10px] text-emerald-400 bg-[#1A1A1A]/90 px-1 rounded whitespace-nowrap max-w-[180px] truncate pointer-events-none">
-                {item.tracking_data?.event_name as string || item.element_text || item.element_selector}
-              </span>
+              {isSelected && (
+                <span className="absolute -top-5 left-0 text-[10px] text-emerald-400 bg-[#1A1A1A]/90 px-1 rounded whitespace-nowrap max-w-[180px] truncate pointer-events-none">
+                  {item.tracking_data?.event_name as string || item.element_text || item.element_selector}
+                </span>
+              )}
             </div>
           )
         })}
@@ -170,9 +172,11 @@ export default function ScreenshotOverlay({
                   : 'bg-red-500/15 border border-red-500/60 hover:bg-red-500/25 z-10'
               }`}
             >
-              <span className="absolute -top-5 left-0 text-[10px] text-red-400 bg-[#1A1A1A]/90 px-1 rounded whitespace-nowrap max-w-[180px] truncate pointer-events-none">
-                {item.recommended_ga_spec?.event_name as string || item.element_text || item.element_selector}
-              </span>
+              {isSelected && (
+                <span className="absolute -top-5 left-0 text-[10px] text-red-400 bg-[#1A1A1A]/90 px-1 rounded whitespace-nowrap max-w-[180px] truncate pointer-events-none">
+                  {item.recommended_ga_spec?.event_name as string || item.element_text || item.element_selector}
+                </span>
+              )}
             </div>
           )
         })}
@@ -203,9 +207,11 @@ export default function ScreenshotOverlay({
                   : 'bg-amber-500/15 border border-amber-500/60 hover:bg-amber-500/25 z-10'
               }`}
             >
-              <span className="absolute -top-5 left-0 max-w-[180px] truncate whitespace-nowrap rounded bg-[#1A1A1A]/90 px-1 text-[10px] text-amber-400 pointer-events-none">
-                {item.element_text || item.element_selector}
-              </span>
+              {isSelected && (
+                <span className="absolute -top-5 left-0 max-w-[180px] truncate whitespace-nowrap rounded bg-[#1A1A1A]/90 px-1 text-[10px] text-amber-400 pointer-events-none">
+                  {item.element_text || item.element_selector}
+                </span>
+              )}
             </div>
           )
         })}
