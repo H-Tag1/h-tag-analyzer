@@ -23,6 +23,7 @@ from services.tracking_filter_service import (
 )
 from services.dismissed_issue_service import filter_dismissed_issues
 from services.ga4_channel_service import resolve_channel_or_none
+from services.marketing_exclusion_service import build_page_excluded_items
 from services.scan_history_service import save_scan_history
 from services.tag_classification_service import classify_network_tags
 
@@ -100,7 +101,7 @@ async def single_scan(
 
     yield json.dumps({"type": "ai_analyzing"})
 
-    page_data = _assemble_page_data(
+    page_data = await _assemble_page_data(
         url=url,
         screenshot_id=screenshot_id,
         width=width,
@@ -137,7 +138,7 @@ async def _scan_single(
     elements, datalayer, network_tags = _apply_tracking_id_filter(
         elements, datalayer, network_tags, target_tracking_id
     )
-    return _assemble_page_data(
+    return await _assemble_page_data(
         url=url,
         screenshot_id=screenshot_id,
         width=width,
@@ -201,7 +202,7 @@ async def _scan_authenticated_single(
     elements, datalayer, network_tags = _apply_tracking_id_filter(
         elements, datalayer, network_tags, target_tracking_id
     )
-    return _assemble_page_data(
+    return await _assemble_page_data(
         url=url,
         screenshot_id=screenshot_id,
         width=width,
@@ -213,7 +214,7 @@ async def _scan_authenticated_single(
     )
 
 
-def _assemble_page_data(
+async def _assemble_page_data(
     url: str,
     screenshot_id: str,
     width: int,
@@ -229,6 +230,13 @@ def _assemble_page_data(
         page_url=url,
     )
     issues = filter_dismissed_issues(issues, url)
+    excluded_items, issues = await build_page_excluded_items(
+        url,
+        elements,
+        screenshot_id,
+        tracked_items,
+        issues,
+    )
     channel = resolve_channel_or_none(url)
 
     return PageScanData(
@@ -244,6 +252,7 @@ def _assemble_page_data(
         issues=issues,
         review_items=review_items,
         tracked_items=tracked_items,
+        excluded_items=excluded_items,
         network_tags=network_tags,
     )
 

@@ -2,9 +2,52 @@ from typing import Any, Dict, List, Optional
 
 from models.network_tag_hit import NetworkTagHit
 from models.page_element import PageElement
+from services.ga_event_exclusion_service import is_ignored_datalayer_event
 
 
 EP_FIELDS = ("ep_button_area", "ep_button_area2", "ep_button_name")
+
+# UI label vs GA ep_button_name mismatches (ga4Common template naming).
+EP_BUTTON_NAME_ALIAS_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset({"알림", "알림설정"}),
+)
+
+
+# ga4Common ep_button_name often prefixes the visible label (e.g. 카테고리_스킨케어).
+EP_BUTTON_NAME_VALUE_PREFIXES: tuple[str, ...] = (
+    "카테고리_",
+    "카테고리메뉴_",
+    "탭_",
+    "상세탭_",
+    "배너_",
+    "메뉴_",
+    "브랜드_",
+)
+
+
+def normalize_element_label(text: Optional[str]) -> str:
+    return "".join((text or "").split()).lower()
+
+
+def ep_button_names_match(
+    element_text: Optional[str],
+    ep_button_name: Optional[str],
+) -> bool:
+    element_label = normalize_element_label(element_text)
+    event_label = normalize_element_label(ep_button_name)
+    if not element_label:
+        return not event_label
+    if not event_label:
+        return True
+    if element_label == event_label:
+        return True
+    for group in EP_BUTTON_NAME_ALIAS_GROUPS:
+        if element_label in group and event_label in group:
+            return True
+    for prefix in EP_BUTTON_NAME_VALUE_PREFIXES:
+        if event_label == normalize_element_label(f"{prefix}{element_text or ''}"):
+            return True
+    return False
 
 
 def is_click_event(event_name: str) -> bool:
@@ -76,6 +119,21 @@ def event_name_from_dict(event: Dict[str, Any]) -> str:
     if raw_event.lower().startswith("click_"):
         return raw_event
     return event_name or raw_event
+
+
+def is_verified_click_tracking_event(event: Any) -> bool:
+    if not isinstance(event, dict) or is_ignored_datalayer_event(event):
+        return False
+    return is_click_event(event_name_from_dict(event))
+
+
+def element_has_verified_click_tracking(element: PageElement) -> bool:
+    if is_verified_click_tracking_event(element.tracking_data):
+        return True
+    for event in prefer_click_events(element.click_tracking_events):
+        if is_verified_click_tracking_event(event):
+            return True
+    return False
 
 
 def prefer_click_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

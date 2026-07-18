@@ -11,7 +11,7 @@ class ScanLoginCredentials(BaseModel):
 
 
 class ScanRange(BaseModel):
-    preset: Literal["viewport", "top2", "full", "custom"] = "top2"
+    preset: Literal["viewport", "top2", "full", "custom"] = "full"
     startY: Optional[float] = None
     endY: Optional[float] = None
 

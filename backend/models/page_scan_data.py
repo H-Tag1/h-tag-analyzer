@@ -1,6 +1,7 @@
 from typing import List, Any, Dict, Optional
 from pydantic import BaseModel, Field
 from .ai_analysis_item import AiAnalysisItem
+from .excluded_analysis_item import ExcludedAnalysisItem
 from .tracked_analysis_item import TrackedAnalysisItem
 from .network_tag_hit import NetworkTagHit
 
@@ -18,4 +19,5 @@ class PageScanData(BaseModel):
     issues: List[AiAnalysisItem]
     review_items: List[AiAnalysisItem] = Field(default_factory=list)
     tracked_items: List[TrackedAnalysisItem] = Field(default_factory=list)
+    excluded_items: List[ExcludedAnalysisItem] = Field(default_factory=list)
     network_tags: List[NetworkTagHit] = Field(default_factory=list)

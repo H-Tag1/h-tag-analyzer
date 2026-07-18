@@ -3,6 +3,7 @@ import type { TagSpec } from '../utils/tagSpec'
 interface Props {
   value: TagSpec
   onChange: (value: TagSpec) => void
+  readOnly?: boolean
 }
 
 const FIELDS: { key: keyof TagSpec; label: string }[] = [
@@ -12,7 +13,7 @@ const FIELDS: { key: keyof TagSpec; label: string }[] = [
   { key: 'ep_button_name', label: 'ep_button_name' },
 ]
 
-export default function TagSpecEditor({ value, onChange }: Props) {
+export default function TagSpecEditor({ value, onChange, readOnly = false }: Props) {
   const update = (key: keyof TagSpec, next: string) => {
     onChange({ ...value, [key]: next })
   }
@@ -28,8 +29,11 @@ export default function TagSpecEditor({ value, onChange }: Props) {
           <input
             type="text"
             value={value[key]}
+            readOnly={readOnly}
             onChange={e => update(key, e.target.value)}
-            className="flex-1 min-w-0 bg-[#0F0F0F] border border-[#2A2A2A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-600"
+            className={`flex-1 min-w-0 bg-[#0F0F0F] border border-[#2A2A2A] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-600 ${
+              readOnly ? 'opacity-80 cursor-default' : ''
+            }`}
           />
         </div>
       ))}

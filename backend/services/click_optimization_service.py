@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 MIN_CLUSTER_SIZE = 2
 MAX_ELEMENTS_FOR_LLM = 150
+MIN_HEURISTIC_GROUP_PROTECT_SIZE = 8
+HEURISTIC_GROUP_PREFIXES = ("structure:", "layout:")
 
 
 @dataclass(frozen=True)
@@ -216,6 +218,13 @@ def cluster_duplicate_elements_with_llm(elements: List[PageElement]) -> List[Cli
     return validate_cluster_assignments(assignments, elements)
 
 
+def _is_protected_heuristic_group(element: PageElement) -> bool:
+    group_id = element.click_group_id or ""
+    if not any(group_id.startswith(prefix) for prefix in HEURISTIC_GROUP_PREFIXES):
+        return False
+    return (element.click_group_size or 0) >= MIN_HEURISTIC_GROUP_PROTECT_SIZE
+
+
 async def apply_llm_click_clustering(elements: List[PageElement]) -> List[PageElement]:
     if not elements:
         return elements
@@ -231,13 +240,30 @@ async def apply_llm_click_clustering(elements: List[PageElement]) -> List[PageEl
             return elements
 
         llm_indices = {assignment.element_index for assignment in assignments}
+        protected_indices = {
+            element.element_index
+            for element in elements
+            if element.element_index in llm_indices and _is_protected_heuristic_group(element)
+        }
+        if protected_indices:
+            logger.info(
+                "Preserving heuristic click groups for %d elements (skip LLM override)",
+                len(protected_indices),
+            )
+            llm_indices -= protected_indices
+
         for element in elements:
             if element.element_index in llm_indices:
                 element.click_group_id = None
                 element.click_group_representative = True
                 element.click_group_size = 1
 
-        applied_groups = apply_cluster_assignments(elements, assignments)
+        filtered_assignments = [
+            assignment
+            for assignment in assignments
+            if assignment.element_index not in protected_indices
+        ]
+        applied_groups = apply_cluster_assignments(elements, filtered_assignments)
         logger.info(
             "LLM click clustering applied: groups=%d grouped_elements=%d click_candidates=%d",
             applied_groups,

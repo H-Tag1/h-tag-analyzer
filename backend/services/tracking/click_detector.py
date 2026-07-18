@@ -10,12 +10,26 @@ from services.ga_event_exclusion_service import (
     is_ignored_datalayer_event,
     is_ignored_ga_event_name,
 )
-from services.tracking.event_normalizer import extract_ep_params, is_interaction_event
+from models.network_tag_hit import NetworkTagHit
+from services.tracking.event_normalizer import (
+    element_has_verified_click_tracking,
+    ep_button_names_match,
+    extract_ep_params,
+    is_interaction_event,
+    normalize_element_label,
+    params_from_event_dict,
+)
 from services.tracking.tracking_data import merge_tracking_data
 from services.element_grouping_service import (
     propagate_group_click_results,
     should_click_for_verification,
 )
+from services.hamburger_menu_filter import (
+    HAMBURGER_MENU_FILTER_JS,
+    close_hamburger_drawer_if_open,
+    is_hamburger_drawer_element,
+)
+from services.scan_navigation_guard import install_scan_navigation_guard
 
 
 logger = logging.getLogger(__name__)
@@ -122,6 +136,13 @@ async def apply_click_tracking_detection(
     total_candidates = len(candidates)
     completed_candidates = 0
 
+    if network_collector:
+        network_collector.register_allowed_document_url(page_url)
+        network_collector.register_allowed_document_url(initial_url)
+        network_collector.enable_navigation_lock()
+
+    await install_scan_navigation_guard(page)
+
     logger.info(
         "Click optimization: total_clickable=%d actual_clicks=%d skipped_siblings=%d reduction=%.1f%%",
         optimization_stats["total_clickable"],
@@ -141,7 +162,12 @@ async def apply_click_tracking_detection(
 
     for element in candidates:
         try:
-            await _restore_initial_click_state(page, page_url, initial_url)
+            await _restore_initial_click_state(
+                page,
+                page_url,
+                initial_url,
+                network_collector=network_collector,
+            )
             url_before = page.url
             datalayer_before = await _collect_datalayer(page)
             network_hit_count_before = len(network_collector.get_hits()) if network_collector else 0
@@ -181,12 +207,30 @@ async def apply_click_tracking_detection(
             network_events = _collect_click_network_events(network_collector, network_hit_count_before)
             if not ga_events and not network_events:
                 await _close_click_side_effects(page)
-                await _restore_initial_click_state(page, page_url, initial_url, force=page.url != initial_url)
+                await _restore_initial_click_state(
+                    page,
+                    page_url,
+                    initial_url,
+                    force=page.url != initial_url,
+                    network_collector=network_collector,
+                )
                 continue
 
             normalized_events = [_normalize_tracking_event(event) for event in ga_events]
             normalized_events.extend(network_events)
+            normalized_events = _filter_events_for_element_label(element, normalized_events)
             normalized_events.sort(key=_tracking_event_priority)
+            if not normalized_events:
+                await _close_click_side_effects(page)
+                await _restore_initial_click_state(
+                    page,
+                    page_url,
+                    initial_url,
+                    force=page.url != initial_url,
+                    network_collector=network_collector,
+                )
+                continue
+
             element.click_tracking_events.extend(normalized_events)
             element.has_ga_tag = True
             if "click_datalayer" not in element.tracking_methods:
@@ -201,10 +245,22 @@ async def apply_click_tracking_detection(
             )
 
             if _should_reset_page_after_click(normalized_events):
-                await _restore_initial_click_state(page, page_url, initial_url, force=True)
+                await _restore_initial_click_state(
+                    page,
+                    page_url,
+                    initial_url,
+                    force=True,
+                    network_collector=network_collector,
+                )
             else:
                 await _close_click_side_effects(page)
-                await _restore_initial_click_state(page, page_url, initial_url, force=page.url != initial_url)
+                await _restore_initial_click_state(
+                    page,
+                    page_url,
+                    initial_url,
+                    force=page.url != initial_url,
+                    network_collector=network_collector,
+                )
         finally:
             completed_candidates += 1
             await _report_progress(progress, {
@@ -289,6 +345,8 @@ def _click_priority(element: PageElement) -> Tuple[int, int, int, int, int]:
 def _should_click_element(element: PageElement) -> bool:
     if element.request_rule_ids:
         return True
+    if is_hamburger_drawer_element(element):
+        return False
     text = (element.text or "").strip().lower()
     if any(keyword in text for keyword in DANGEROUS_CLICK_TEXTS):
         return False
@@ -310,6 +368,7 @@ async def _click_initial_element(
                 const requestMode = payload.requestRuleSelectors.length > 0;
                 const els = requestMode ? allEls : visibleEls;
                 {PERSISTENT_NAVIGATION_CHECK_JS}
+                {HAMBURGER_MENU_FILTER_JS}
                 function buildSelector(el) {{
                     if (el.id) return '#' + CSS.escape(el.id);
                     if (el.className && typeof el.className === 'string') {{
@@ -373,6 +432,7 @@ async def _click_initial_element(
                     el = textMatches.length === 1 ? textMatches[0] : (els.find(matches) || null);
                 }}
                 if (!el) return null;
+                if (isInsideHamburgerDrawer(el)) return null;
                 if (payload.excludePersistentNavigation && isPersistentNavigationElement(el)) return null;
                 el.scrollIntoView({{ block: 'center', inline: 'center' }});
                 const rect = el.getBoundingClientRect();
@@ -428,25 +488,48 @@ async def _click_initial_element(
         return False
 
 
-async def _restore_initial_click_state(page: Page, scan_url: str, initial_url: str, force: bool = False) -> None:
+async def _restore_initial_click_state(
+    page: Page,
+    scan_url: str,
+    initial_url: str,
+    force: bool = False,
+    network_collector=None,
+) -> None:
     if not force and page.url == initial_url:
         return
 
-    try:
-        await page.goto(initial_url, wait_until="load", timeout=30000)
-        await page.wait_for_timeout(300)
-        return
-    except Exception:
-        pass
+    if network_collector:
+        network_collector.disable_navigation_lock()
 
     try:
-        await page.goto(scan_url, wait_until="load", timeout=30000)
-        await page.wait_for_timeout(300)
-    except Exception as exc:
-        logger.warning("Failed to restore initial page before click: %s", exc)
+        try:
+            await page.goto(initial_url, wait_until="load", timeout=30000)
+            await page.wait_for_timeout(500)
+            return
+        except Exception:
+            pass
+
+        try:
+            await page.goto(scan_url, wait_until="load", timeout=30000)
+            await page.wait_for_timeout(500)
+        except Exception as exc:
+            logger.warning("Failed to restore initial page before click: %s", exc)
+    finally:
+        if network_collector:
+            network_collector.register_allowed_document_url(page.url or initial_url or scan_url)
+            network_collector.register_allowed_document_url(initial_url)
+            network_collector.register_allowed_document_url(scan_url)
+            network_collector.enable_navigation_lock()
+            await install_scan_navigation_guard(page)
 
 
 async def _close_click_side_effects(page: Page) -> None:
+    try:
+        await close_hamburger_drawer_if_open(page)
+        await page.wait_for_timeout(100)
+    except Exception:
+        pass
+
     try:
         await page.keyboard.press("Escape")
         await page.wait_for_timeout(50)
@@ -623,5 +706,83 @@ def _tracking_event_priority(event: Dict[str, Any]) -> int:
     return 1
 
 
+def _filter_events_for_element_label(
+    element: PageElement,
+    events: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not events:
+        return events
+
+    interaction_events = [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and is_interaction_event(
+            _event_name_from_tracking_dict(event),
+            params_from_event_dict(event),
+        )
+    ]
+    if interaction_events:
+        return interaction_events
+
+    label = normalize_element_label(element.text)
+    if not label:
+        return events
+
+    filtered: List[Dict[str, Any]] = []
+    for event in events:
+        params = params_from_event_dict(event)
+        event_label = params.get("ep_button_name", "")
+        if event_label and not ep_button_names_match(element.text, event_label):
+            continue
+        filtered.append(event)
+    return filtered
+
+
 def _event_name_from_tracking_dict(event: Dict[str, Any]) -> str:
     return str(event.get("event_name") or event.get("event") or "").strip()
+
+
+def attach_click_network_hits_to_elements(
+    elements: List[PageElement],
+    hits: List[NetworkTagHit],
+) -> int:
+    if not elements or not hits:
+        return 0
+
+    click_hits = [hit for hit in hits if hit.trigger == "click"]
+    if not click_hits:
+        return 0
+
+    attached = 0
+    used_hit_indices: set[int] = set()
+    for element in sorted(elements, key=lambda item: item.element_index):
+        if is_hamburger_drawer_element(element) or not element.click_tested:
+            continue
+        if element_has_verified_click_tracking(element):
+            continue
+
+        for idx, hit in enumerate(click_hits):
+            if idx in used_hit_indices:
+                continue
+            params = extract_ep_params(hit)
+            event_name = (hit.event_name or "").strip()
+            if not is_interaction_event(event_name, params):
+                continue
+
+            event_dict = {
+                "event_name": event_name,
+                **params,
+            }
+            element.click_tracking_events.append(event_dict)
+            element.has_ga_tag = True
+            if "click_network" not in element.tracking_methods:
+                element.tracking_methods.append("click_network")
+            element.tracking_data = merge_tracking_data(element.tracking_data, event_dict)
+            used_hit_indices.add(idx)
+            attached += 1
+            break
+
+    if attached:
+        logger.info("Attached %d orphan click network hit(s) to clicked elements", attached)
+    return attached

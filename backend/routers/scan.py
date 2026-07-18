@@ -20,7 +20,7 @@ async def scan(
     url: str,
     fullScan: bool = False,
     trackingId: str = "G-1NWKV3S1TW",
-    rangePreset: Literal["viewport", "top2", "full", "custom"] = "top2",
+    rangePreset: Literal["viewport", "top2", "full", "custom"] = "full",
     rangeStartY: Optional[float] = None,
     rangeEndY: Optional[float] = None,
 ):

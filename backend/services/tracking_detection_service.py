@@ -7,7 +7,10 @@ from models.page_element import PageElement
 from models.tracked_analysis_item import TrackedAnalysisItem
 from models.element_tracking_signal import ElementTrackingSignal
 from services.code_generator_service import parse_ga_event_call
-from services.tracking.click_detector import apply_click_tracking_detection
+from services.tracking.click_detector import (
+    apply_click_tracking_detection,
+    attach_click_network_hits_to_elements,
+)
 from services.tracking.tracking_data import has_ga_event_fields, merge_tracking_data
 
 logger = logging.getLogger(__name__)

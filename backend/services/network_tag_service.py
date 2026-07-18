@@ -10,6 +10,11 @@ from playwright.async_api import Page, Request
 from models.network_tag_hit import NetworkTagHit
 from models.network_tag_display_field import NetworkTagDisplayField
 from services.ga_event_exclusion_service import is_ignored_ga_event_name
+from services.scan_navigation_guard import (
+    fulfill_blocked_document,
+    normalize_document_url,
+    should_block_document_navigation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +42,34 @@ GA4_COLLECT_PATH_PATTERNS = (
 
 
 class NetworkTagCollector:
-    def __init__(self, page: Page, block_ga_transmission: bool = True):
+    def __init__(
+        self,
+        page: Page,
+        scan_url: str = "",
+        block_ga_transmission: bool = True,
+    ):
         self.page = page
+        self.scan_url = scan_url
         self.hits: List[NetworkTagHit] = []
         self._trigger = "page_load"
         self._listener = None
         self._route_handler = None
         self.block_ga_transmission = block_ga_transmission
+        self._navigation_lock_enabled = False
+        self._allowed_document_urls: set[str] = set()
+        if scan_url:
+            self.register_allowed_document_url(scan_url)
+
+    def register_allowed_document_url(self, url: str) -> None:
+        normalized = normalize_document_url(url)
+        if normalized:
+            self._allowed_document_urls.add(normalized)
+
+    def enable_navigation_lock(self) -> None:
+        self._navigation_lock_enabled = True
+
+    def disable_navigation_lock(self) -> None:
+        self._navigation_lock_enabled = False
 
     async def start(self) -> None:
         if self.block_ga_transmission:
@@ -69,10 +95,15 @@ class NetworkTagCollector:
 
     def set_trigger(self, trigger: str) -> None:
         self._trigger = trigger
+        if trigger == "click":
+            self.enable_navigation_lock()
 
     def reset(self) -> None:
         self.hits = []
         self._trigger = "page_load"
+        self.disable_navigation_lock()
+        if self.scan_url:
+            self._allowed_document_urls = {normalize_document_url(self.scan_url)}
 
     def get_hits(self) -> List[NetworkTagHit]:
         return list(self.hits)
@@ -84,6 +115,18 @@ class NetworkTagCollector:
             if hit:
                 self.hits.append(hit)
             await route.abort()
+            return
+
+        if should_block_document_navigation(
+            request,
+            self._allowed_document_urls,
+            self._navigation_lock_enabled,
+        ):
+            logger.info(
+                "Blocked cross-page document navigation during click scan: %s",
+                request.url,
+            )
+            await fulfill_blocked_document(route)
             return
 
         await route.continue_()

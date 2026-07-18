@@ -9,6 +9,10 @@ from services.ga_event_exclusion_service import (
     filter_ignored_network_tags as _filter_ignored_network_tags,
     is_ignored_datalayer_event,
 )
+from services.tracking.event_normalizer import (
+    element_has_verified_click_tracking,
+    is_verified_click_tracking_event,
+)
 
 DEFAULT_TRACKING_ID = "G-1NWKV3S1TW"
 GA_MEASUREMENT_ID_PATTERN = re.compile(r"\bG-[A-Z0-9]+\b", re.IGNORECASE)
@@ -98,12 +102,14 @@ def filter_elements_by_tracking_id(elements: List[PageElement], tracking_id: Opt
             and not is_ignored_datalayer_event(event)
         ]
 
-        if element.tracking_data and not tracking_data_matches_tracking_id(element.tracking_data, target):
+        if element.tracking_data and (
+            not tracking_data_matches_tracking_id(element.tracking_data, target)
+            or not is_verified_click_tracking_event(element.tracking_data)
+        ):
             element.tracking_data = {}
 
         element.has_ga_tag = bool(
-            element.tracking_data
-            or element.click_tracking_events
+            element_has_verified_click_tracking(element)
             or _static_signals_match_tracking_id(element, target)
         )
 

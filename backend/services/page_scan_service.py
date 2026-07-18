@@ -14,10 +14,16 @@ from playwright.async_api import Browser, CDPSession, Page, async_playwright
 from services.tracking_detection_service import (
     apply_click_tracking_detection,
     apply_static_tracking_detection,
+    attach_click_network_hits_to_elements,
     parse_static_signals,
 )
 from services.element_grouping_service import (
     apply_click_grouping_with_llm,
+)
+from services.hamburger_menu_filter import (
+    HAMBURGER_MENU_FILTER_JS,
+    close_hamburger_drawer_if_open,
+    filter_out_hamburger_drawer_elements,
 )
 from services.network_tag_service import NetworkTagCollector
 from services.site_adapters.hddfs import (
@@ -68,7 +74,7 @@ async def collect_page_data(
         collector: Optional[NetworkTagCollector] = None
         try:
             page = await _new_scan_page(browser, url)
-            collector = NetworkTagCollector(page)
+            collector = NetworkTagCollector(page, scan_url=url)
             await collector.start()
 
             if login and login.enabled:
@@ -110,7 +116,7 @@ async def collect_page_data_with_clean_capture(
         collector: Optional[NetworkTagCollector] = None
         try:
             tracking_page = await _new_scan_page(browser, url)
-            collector = NetworkTagCollector(tracking_page)
+            collector = NetworkTagCollector(tracking_page, scan_url=url)
             await collector.start()
 
             await _goto_scan_target(tracking_page, url)
@@ -184,7 +190,7 @@ async def collect_authenticated_page_data(
     scan_range: Optional[ScanRange] = None,
     progress: Optional[ProgressReporter] = None,
 ) -> Tuple[str, int, int, List[PageElement], List[Dict[str, Any]], List[NetworkTagHit]]:
-    collector = NetworkTagCollector(page)
+    collector = NetworkTagCollector(page, scan_url=url)
     await collector.start()
     try:
         await _goto_scan_target(page, url)
@@ -226,6 +232,9 @@ async def _scan_current_page(
         exclude_auth_actions=exclude_auth_actions,
         scan_range=scan_range,
     )
+    await page.evaluate("() => window.scrollTo(0, 0)")
+    await page.wait_for_timeout(300)
+    await _prepare_capture_page(page, scan_range)
     screenshot_id, width, height, screenshot_offset_y = await _take_screenshot(page, scan_range)
     await _report_progress(progress, {
         "type": "screenshot_done",
@@ -289,7 +298,11 @@ async def _collect_tracking_data(
         progress=progress,
         exclude_persistent_navigation=exclude_persistent_navigation,
     )
+    await close_hamburger_drawer_if_open(page)
+    await page.wait_for_timeout(200)
+    elements = filter_out_hamburger_drawer_elements(elements)
     network_tags = collector.get_hits()
+    attach_click_network_hits_to_elements(elements, network_tags)
 
     return elements, datalayer, network_tags
 
@@ -469,6 +482,8 @@ async def _collect_elements(
             return base;
         }
 
+        """ + HAMBURGER_MENU_FILTER_JS + """
+
         return Array.from(document.querySelectorAll('button, a, [onclick], input[type="submit"], input[type="button"]'))
             .map((el, domIndex) => {
                 const rect = getVisualRect(el);
@@ -496,6 +511,7 @@ async def _collect_elements(
                     in_persistent_navigation: Boolean(
                         el.closest('[data-h-tag-persistent-navigation]')
                     ),
+                    in_hamburger_drawer: isInsideHamburgerDrawer(el),
                     request_rule_ids: rules.map(rule => rule.rule_id),
                     request_rule_selectors: rules.map(rule => rule.selector),
                     request_candidate_key: buildCandidateKey(el, rules, text),
@@ -548,12 +564,13 @@ async def _collect_elements(
             request_rule_selectors=list(item.get("request_rule_selectors") or []),
             request_candidate_key=item.get("request_candidate_key") or None,
             request_dom_index=int(item.get("dom_index", -1)),
+            in_hamburger_drawer=bool(item.get("in_hamburger_drawer")),
         ))
     return elements
 
 
 async def _resolve_scan_range(page: Page, scan_range: Optional[ScanRange]) -> Optional[Tuple[float, float]]:
-    preset = scan_range.preset if scan_range else "top2"
+    preset = scan_range.preset if scan_range else "full"
     if preset == "full":
         return None
 
@@ -809,6 +826,12 @@ async def _prepare_capture_page(page: Page, scan_range: Optional[ScanRange]) -> 
     # 좌표 수집 대상 요소를 대량 소실시킨다(실측: 339→112). 그 결과 추적 요소가
     # 표시용 요소와 매칭되지 않아 오버레이 박스가 대량 누락된다. full_page 스크린샷은
     # 스크롤 없이도 페이지 전체를 캡처하므로 스크롤이 불필요하다.
+    try:
+        await close_hamburger_drawer_if_open(page)
+        await page.wait_for_timeout(200)
+    except Exception:
+        pass
+
     try:
         await page.evaluate("() => document.fonts?.ready || Promise.resolve()")
     except Exception:

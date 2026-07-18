@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronRight, Check, Loader, Trash2 } from 'lucide-react'
 import type { AiAnalysisItem, GeneratedCodeSnapshot } from '../types'
 import TagSpecEditor from './TagSpecEditor'
 import CodeViewer from './CodeViewer'
 import { issueIdentityKey } from '../utils/dismissedIssues'
 import { saveGeneratedCode } from '../utils/scanHistory'
-import { mergeTagSpec, normalizeTagSpec, toGaSpec, type TagSpec } from '../utils/tagSpec'
+import { mergeTagSpec, normalizeTagSpec, type TagSpec } from '../utils/tagSpec'
 import { scrollElementIntoContainerAfterLayout } from '../utils/scrollIntoContainer'
 
 interface Props {
@@ -30,6 +30,37 @@ function getTagSpec(
   const base = normalizeTagSpec(issue.recommended_ga_spec)
   const suggestion = suggested[key]
   return suggestion ? mergeTagSpec(base, suggestion) : base
+}
+
+function buildGenerateSpec(issue: AiAnalysisItem, tag: TagSpec): Record<string, unknown> {
+  const base = issue.recommended_ga_spec ?? {}
+  return {
+    ...base,
+    element_selector: issue.element_selector,
+    event_name: tag.event_name.trim() || String(base.event_name ?? ''),
+    ep_button_area: tag.ep_button_area.trim() || String(base.ep_button_area ?? ''),
+    ep_button_area2: tag.ep_button_area2.trim() || String(base.ep_button_area2 ?? ''),
+    ep_button_name: tag.ep_button_name.trim() || String(base.ep_button_name ?? ''),
+    is_virtual: false,
+  }
+}
+
+function issuesForCodeGeneration(issues: AiAnalysisItem[]): AiAnalysisItem[] {
+  const seenGroups = new Set<string>()
+  return issues.filter(issue => {
+    if (issue.verification_source === 'group_inherited') {
+      return false
+    }
+    const groupId = issue.click_group_id
+    if (!groupId) {
+      return true
+    }
+    if (seenGroups.has(groupId)) {
+      return false
+    }
+    seenGroups.add(groupId)
+    return true
+  })
 }
 
 export default function IssuePanel({
@@ -59,6 +90,8 @@ export default function IssuePanel({
       listRef.current,
     )
   }, [selectedIndex])
+
+  const codeGenerationIssues = useMemo(() => issuesForCodeGeneration(issues), [issues])
 
   useEffect(() => {
     if (!pageUrl || issues.length === 0) {
@@ -127,9 +160,9 @@ export default function IssuePanel({
     setGeneratedCode(null)
     try {
       const results = await Promise.all(
-        issues.map(async (issue, idx) => {
+        codeGenerationIssues.map(async (issue, idx) => {
           const tag = getTagSpec(issue, editedTags, suggestedTags)
-          const spec = toGaSpec(tag, issue.element_selector)
+          const spec = buildGenerateSpec(issue, tag)
           const res = await fetch('/api/generate-code', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
@@ -148,7 +181,7 @@ export default function IssuePanel({
       setGeneratedCode(code)
 
       if (historyId && pageUrl) {
-        const updatedCodes = await saveGeneratedCode(historyId, pageUrl, code, issues.length)
+        const updatedCodes = await saveGeneratedCode(historyId, pageUrl, code, codeGenerationIssues.length)
         onGeneratedCodesChange?.(updatedCodes)
       }
     } finally {
@@ -175,7 +208,7 @@ export default function IssuePanel({
         >
           {isGenerating
             ? <><Loader size={14} className="animate-spin" /> 생성 중...</>
-            : <><Check size={14} /> 확정 및 코드 생성 ({issues.length}건)</>
+            : <><Check size={14} /> 확정 및 코드 생성 ({codeGenerationIssues.length}건)</>
           }
         </button>
 
@@ -195,6 +228,8 @@ export default function IssuePanel({
           const suggestion = suggestedTags[key]
           const isDismissing = dismissingKey === key
 
+          const isGroupInherited = item.verification_source === 'group_inherited'
+
           return (
             <div
               key={key}
@@ -202,7 +237,11 @@ export default function IssuePanel({
                 itemRefs.current[idx] = node
               }}
               className={`border-b border-[#2A2A2A] transition-colors ${
-                isSelected ? 'bg-red-500/10 border-l-2 border-l-red-400' : 'border-l-2 border-l-transparent'
+                isSelected
+                  ? isGroupInherited
+                    ? 'bg-yellow-400/10 border-l-2 border-l-yellow-300'
+                    : 'bg-red-500/10 border-l-2 border-l-red-400'
+                  : 'border-l-2 border-l-transparent'
               }`}
             >
               <div className="flex items-start gap-1 px-2 py-3">
@@ -210,11 +249,18 @@ export default function IssuePanel({
                   onClick={() => onSelect(idx)}
                   className="flex-1 flex items-start gap-3 text-left hover:bg-white/[0.02] rounded-lg px-2 py-0.5 min-w-0"
                 >
-                  <div className="w-1.5 h-1.5 rounded-full bg-red-500 mt-1.5 flex-shrink-0" />
+                  <div className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${
+                    isGroupInherited ? 'bg-yellow-300' : 'bg-red-500'
+                  }`} />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-white truncate">
                       {tag.event_name || item.element_text || item.element_selector}
                     </p>
+                    {isGroupInherited && (
+                      <p className="text-[11px] text-yellow-300/90 truncate">
+                        그룹 대표 누락 · 보완 코드는 대표 항목 기준
+                      </p>
+                    )}
                     <p className="text-xs text-[#52525B] truncate">{item.issue}</p>
                   </div>
                   <ChevronRight
@@ -237,7 +283,12 @@ export default function IssuePanel({
 
               {isSelected && (
                 <div className="px-4 pb-4 animate-fade-in">
-                  {isSuggesting && !suggestion && (
+                  {isGroupInherited && (
+                    <p className="text-xs text-[#52525B] mb-2">
+                      동일 그룹 요소입니다. 보완 코드는 대표 누락 항목에서 한 번만 생성됩니다.
+                    </p>
+                  )}
+                  {!isGroupInherited && isSuggesting && !suggestion && (
                     <p className="text-xs text-[#52525B] mb-2 flex items-center gap-1.5">
                       <Loader size={12} className="animate-spin" />
                       LLM 명명 추천 불러오는 중...
@@ -245,6 +296,7 @@ export default function IssuePanel({
                   )}
                   <TagSpecEditor
                     value={tag}
+                    readOnly={isGroupInherited}
                     onChange={val => setEditedTags(prev => ({ ...prev, [key]: val }))}
                   />
                 </div>

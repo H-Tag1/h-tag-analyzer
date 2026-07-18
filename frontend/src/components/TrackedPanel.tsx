@@ -40,6 +40,7 @@ export default function TrackedPanel({ trackedItems, selectedIndex, onSelect }: 
           const isSelected = selectedIndex === idx
           const params = normalizeTagSpec(item.tracking_data)
           const title = params.event_name || item.element_text || params.ep_button_name
+          const isGroupInherited = item.verification_source === 'group_inherited'
 
           return (
             <div
@@ -48,7 +49,11 @@ export default function TrackedPanel({ trackedItems, selectedIndex, onSelect }: 
                 itemRefs.current[idx] = node
               }}
               className={`border-b border-[#2A2A2A] transition-colors ${
-                isSelected ? 'bg-emerald-500/10 border-l-2 border-l-emerald-400' : 'border-l-2 border-l-transparent'
+                isSelected
+                  ? isGroupInherited
+                    ? 'bg-lime-400/10 border-l-2 border-l-lime-300'
+                    : 'bg-emerald-500/10 border-l-2 border-l-emerald-400'
+                  : 'border-l-2 border-l-transparent'
               }`}
             >
               <button
@@ -56,10 +61,17 @@ export default function TrackedPanel({ trackedItems, selectedIndex, onSelect }: 
                 className="w-full text-left px-4 py-3 hover:bg-white/[0.02]"
               >
                 <div className="flex items-start gap-3">
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-2 flex-shrink-0" />
+                  <div className={`w-1.5 h-1.5 rounded-full mt-2 flex-shrink-0 ${
+                    isGroupInherited ? 'bg-lime-300' : 'bg-emerald-500'
+                  }`} />
                   <div className="flex-1 min-w-0">
                     {title && (
-                      <p className="text-sm text-white truncate mb-2">{title}</p>
+                      <p className="text-sm text-white truncate mb-1">{title}</p>
+                    )}
+                    {isGroupInherited && (
+                      <p className="text-[11px] text-lime-300/90 mb-2">
+                        그룹 대표 검증 · 직접 클릭 검증 아님
+                      </p>
                     )}
                     <TagParamsTable trackingData={item.tracking_data} />
                   </div>
