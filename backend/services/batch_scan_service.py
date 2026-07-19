@@ -23,6 +23,7 @@ from services.tracking_filter_service import (
 )
 from services.dismissed_issue_service import filter_dismissed_issues
 from services.ga4_channel_service import resolve_channel_or_none
+from services.ga4_template_suggestion_service import suggest_tag_specs_for_page
 from services.marketing_exclusion_service import build_page_excluded_items
 from services.scan_history_service import save_scan_history
 from services.tag_classification_service import classify_network_tags
@@ -239,6 +240,46 @@ def _apply_render_box_corrections(elements, *item_lists) -> None:
                 item.bounding_box = corrected
 
 
+async def _refine_issue_specs_with_llm(page_url: str, issues) -> None:
+    """누락(issues) 항목의 추천 GA 스펙을 LLM으로 정교화한다.
+
+    기존 RAG top-1 매칭은 문맥을 못 봐서 오매칭이 잦다(예: '확대' 버튼에 로그인/비밀번호찾기
+    스펙, 특가상품 전부에 대표 상품의 가격 오염 이름). LLM은 요소 문맥을 보고 event/area를
+    바로잡고 상품/브랜드/카테고리에 맞는 ep_button_name 접두사를 부여한다.
+
+    - 분류(정상/누락/확인/예외)/카운트/박스는 건드리지 않고 recommended_ga_spec 내용만 개선한다.
+    - Azure OpenAI 미설정이면 no-op(기존 RAG 스펙 유지). LLM 실패 시에도 기존 스펙 유지.
+    """
+    if not issues:
+        return
+    if not (settings.azure_openai_key and settings.azure_openai_endpoint):
+        return
+
+    issue_dicts = [
+        {
+            "element_selector": item.element_selector,
+            "element_text": item.element_text,
+            "recommended_ga_spec": {},
+        }
+        for item in issues
+    ]
+    try:
+        refined_specs = await suggest_tag_specs_for_page(page_url, issue_dicts)
+    except Exception as exc:  # noqa: BLE001 - LLM 실패 시 기존 스펙 유지
+        logger.warning("LLM issue spec refinement failed, keeping RAG specs: %s", exc)
+        return
+
+    for item, refined in zip(issues, refined_specs):
+        if not refined:
+            continue
+        # LLM 값 우선, LLM이 비운 필드는 기존 RAG 스펙으로 보완(무손실)
+        merged = dict(item.recommended_ga_spec or {})
+        for key, value in refined.items():
+            if value:
+                merged[key] = value
+        item.recommended_ga_spec = merged
+
+
 async def _assemble_page_data(
     url: str,
     screenshot_id: str,
@@ -267,6 +308,8 @@ async def _assemble_page_data(
     _apply_render_box_corrections(
         elements, tracked_items, issues, review_items, excluded_items
     )
+
+    await _refine_issue_specs_with_llm(url, issues)
 
     return PageScanData(
         url=url,
