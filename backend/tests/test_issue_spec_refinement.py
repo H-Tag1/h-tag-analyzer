@@ -140,6 +140,44 @@ def test_valid_event_name_kept(monkeypatch):
     assert spec["event_name"] == "click_PC_국문_메인"   # 실재값 → LLM 교정 유지
 
 
+def test_variable_spec_preserved(monkeypatch):
+    # 파일 기반 변수/expression 스펙은 LLM이 덮지 않고 보존한다.
+    _enable_azure(monkeypatch)
+    var_spec = {
+        "event_name": "click_PC_국문_혜택",
+        "ep_button_area": "상세탭_혜택",
+        "ep_button_name": "정렬기준_{{optNm}}",
+        "ep_button_name_type": "expression",
+        "ep_button_name_param": '"정렬기준_"+optNm',
+    }
+    issues = [_issue("베스트 상품 선정 기준", dict(var_spec))]
+
+    called = {"v": False}
+
+    async def fake_suggest(url, dicts):
+        called["v"] = True
+        return [{"event_name": "click_PC_국문_혜택", "ep_button_area": "혜택", "ep_button_name": "베스트상품선정기준"}]
+
+    monkeypatch.setattr(batch_scan_service, "suggest_tag_specs_for_page", fake_suggest)
+    asyncio.run(batch_scan_service._refine_issue_specs_with_llm("https://hddfs", issues))
+
+    spec = issues[0].recommended_ga_spec
+    assert spec["ep_button_name"] == "정렬기준_{{optNm}}"        # 리터럴로 안 덮임
+    assert spec["ep_button_name_type"] == "expression"
+
+
+def test_clean_product_name_removes_noise():
+    f = batch_scan_service._clean_product_name
+    assert f("상품_시주198853%500ml", "시주 1988 53% 500ml\n\n$93\n138,458\n원") == "상품_시주1988"
+    assert f("상품_BelugaNoble1L", "Beluga Noble 1L\n\n$63\n93,794\n원") == "상품_BelugaNoble"
+    assert f("상품_알부민킹스틱30포", "알부민 킹 스틱 30포\n\n30%\n\n$21\n31,264\n원") == "상품_알부민킹스틱"
+    # 이미 깨끗하면 그대로
+    assert f("상품_하디꼬냑브이에스오피", "하디 꼬냑 브이에스오피\n\n20%\n\n$59.2\n88,136\n원") == "상품_하디꼬냑브이에스오피"
+    # 비상품 접두사는 무영향
+    assert f("브랜드_바노바기", "바노바기\nBANOBAGI") == "브랜드_바노바기"
+    assert f("동영상_확대", "확대") == "동영상_확대"
+
+
 def test_known_event_names_extracts_from_ga_file():
     # 실제 kr_pc.js에서 이벤트명 추출 (통합 검증)
     known = batch_scan_service._known_event_names("kr_pc.js")

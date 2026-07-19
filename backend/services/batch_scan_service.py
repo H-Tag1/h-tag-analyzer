@@ -264,6 +264,30 @@ def _known_event_names(template_filename: str) -> frozenset:
     return frozenset(_EVENT_NAME_PATTERN.findall(text))
 
 
+# 상품 카드 이름에서 잘라낼 노이즈 경계: 줄바꿈 / 할인율 / 가격($·원·천단위콤마)
+_PRODUCT_NAME_CUT = re.compile(r"\n|\d+\s*%|\$|원|\d{1,3},\d{3}")
+# 이름 끝에 붙는 용량/수량 단위
+_PRODUCT_VOLUME = re.compile(r"\s*\d+\s*(ml|mL|ML|L|포|개입|매|정|병)\b")
+
+
+def _clean_product_name(ep_button_name: str, element_text: str) -> str:
+    """리터럴 상품명(상품_...)에서 가격·할인율·용량 노이즈를 제거한다.
+
+    LLM이 상품 카드 전체 텍스트를 이름에 넣어 '상품_시주198853%500ml'처럼 나오는 것을,
+    element_text(공백·줄바꿈이 살아있는 원본)에서 상품명 앞부분만 재도출해 '상품_시주1988'로.
+    '상품_' 접두사 + 카드에 가격/할인 노이즈가 있을 때만 동작(다른 이름·변수형엔 무영향).
+    """
+    if not ep_button_name or not ep_button_name.startswith("상품_") or not element_text:
+        return ep_button_name
+    if not re.search(r"%|\$|원|,\d{3}", element_text):
+        return ep_button_name
+    match = _PRODUCT_NAME_CUT.search(element_text)
+    name_part = element_text[: match.start()] if match else element_text
+    name_part = _PRODUCT_VOLUME.sub("", name_part)
+    name_part = re.sub(r"\s+", "", name_part).strip()
+    return f"상품_{name_part}" if name_part else ep_button_name
+
+
 async def _refine_issue_specs_with_llm(page_url: str, issues) -> None:
     """누락(issues) 항목의 추천 GA 스펙을 LLM으로 정교화한다.
 
@@ -302,6 +326,14 @@ async def _refine_issue_specs_with_llm(page_url: str, issues) -> None:
         if not refined:
             continue
         original = dict(item.recommended_ga_spec or {})
+        # 진짜 변수 표현식(이름에 {{ }} 템플릿 마커가 있는 것, 예: 정렬기준_{{optNm}})만 보존한다.
+        # RAG 그룹 로직이 type=expression 플래그만 달고 이름은 대표의 리터럴을 채운 경우가 있어,
+        # 플래그가 아니라 실제 {{ }} 유무로 판별해야 오탐(리터럴 노이즈 보존)을 막는다.
+        if (
+            original.get("ep_button_name_type") in {"expression", "variable"}
+            and "{{" in str(original.get("ep_button_name") or "")
+        ):
+            continue
         # LLM 값 우선, LLM이 비운 필드는 기존 RAG 스펙으로 보완(무손실)
         merged = dict(original)
         for key, value in refined.items():
@@ -318,6 +350,17 @@ async def _refine_issue_specs_with_llm(page_url: str, issues) -> None:
                     fallback,
                 )
                 merged["event_name"] = fallback
+        # 리터럴 상품명의 가격/할인/용량 노이즈 제거 (진짜 변수형은 위에서 이미 skip)
+        name = merged.get("ep_button_name")
+        if name:
+            merged["ep_button_name"] = _clean_product_name(name, item.element_text or "")
+        # 이름이 리터럴로 확정됐는데 expression 플래그/파라미터가 남아있으면(RAG 오설정) 정리
+        if merged.get("ep_button_name_type") in {"expression", "variable"} and "{{" not in str(
+            merged.get("ep_button_name") or ""
+        ):
+            merged.pop("ep_button_name_type", None)
+            merged.pop("ep_button_name_param", None)
+            merged.pop("setup_lines", None)
         item.recommended_ga_spec = merged
 
 
