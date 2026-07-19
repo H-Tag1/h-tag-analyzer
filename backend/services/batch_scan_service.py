@@ -1,6 +1,9 @@
 import asyncio
+import functools
 import json
 import logging
+import re
+from pathlib import Path
 from typing import AsyncGenerator, List, Optional
 
 from playwright.async_api import async_playwright
@@ -240,6 +243,27 @@ def _apply_render_box_corrections(elements, *item_lists) -> None:
                 item.bounding_box = corrected
 
 
+_EVENT_NAME_PATTERN = re.compile(r"click_[A-Za-z]+_[가-힣A-Za-z0-9_{}]+")
+
+
+@functools.lru_cache(maxsize=8)
+def _known_event_names(template_filename: str) -> frozenset:
+    """채널의 실제 ga4Common.js 파일에서 event_name 집합을 추출한다.
+
+    LLM이 지어낸(파일에 없는) event_name을 걸러내는 근거로 쓴다. 파일이 없으면
+    빈 집합을 반환하고, 이 경우 가드레일은 비활성(모든 값 통과)된다.
+    """
+    if not template_filename:
+        return frozenset()
+    path = Path(settings.ga4common_templates_dir) / template_filename
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Failed to read GA template %s for event validation: %s", path, exc)
+        return frozenset()
+    return frozenset(_EVENT_NAME_PATTERN.findall(text))
+
+
 async def _refine_issue_specs_with_llm(page_url: str, issues) -> None:
     """누락(issues) 항목의 추천 GA 스펙을 LLM으로 정교화한다.
 
@@ -249,6 +273,8 @@ async def _refine_issue_specs_with_llm(page_url: str, issues) -> None:
 
     - 분류(정상/누락/확인/예외)/카운트/박스는 건드리지 않고 recommended_ga_spec 내용만 개선한다.
     - Azure OpenAI 미설정이면 no-op(기존 RAG 스펙 유지). LLM 실패 시에도 기존 스펙 유지.
+    - 가드레일: LLM이 낸 event_name이 실제 GA파일에 없으면(지어낸 값) 근거 있는 원래 RAG
+      event_name으로 되돌린다. area/name 개선은 유지하되 event_name은 파일 실재값만 나가게 한다.
     """
     if not issues:
         return
@@ -269,14 +295,29 @@ async def _refine_issue_specs_with_llm(page_url: str, issues) -> None:
         logger.warning("LLM issue spec refinement failed, keeping RAG specs: %s", exc)
         return
 
+    channel = resolve_channel_or_none(page_url)
+    known_events = _known_event_names(channel.template_filename) if channel else frozenset()
+
     for item, refined in zip(issues, refined_specs):
         if not refined:
             continue
+        original = dict(item.recommended_ga_spec or {})
         # LLM 값 우선, LLM이 비운 필드는 기존 RAG 스펙으로 보완(무손실)
-        merged = dict(item.recommended_ga_spec or {})
+        merged = dict(original)
         for key, value in refined.items():
             if value:
                 merged[key] = value
+        # 가드레일: 파일에 없는 event_name은 근거 있는 원래 값으로 되돌림
+        event_name = merged.get("event_name")
+        if known_events and event_name and event_name not in known_events:
+            fallback = original.get("event_name")
+            if fallback:
+                logger.info(
+                    "LLM event_name %r not found in GA file, reverting to RAG value %r",
+                    event_name,
+                    fallback,
+                )
+                merged["event_name"] = fallback
         item.recommended_ga_spec = merged
 
 

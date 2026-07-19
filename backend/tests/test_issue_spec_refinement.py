@@ -96,3 +96,53 @@ def test_noop_empty_issues(monkeypatch):
     monkeypatch.setattr(batch_scan_service, "suggest_tag_specs_for_page", fake_suggest)
     asyncio.run(batch_scan_service._refine_issue_specs_with_llm("https://site", []))
     assert called["v"] is False
+
+
+class _FakeChannel:
+    template_filename = "kr_pc.js"
+
+
+def _guard_env(monkeypatch, known):
+    _enable_azure(monkeypatch)
+    monkeypatch.setattr(batch_scan_service, "resolve_channel_or_none", lambda url: _FakeChannel())
+    monkeypatch.setattr(batch_scan_service, "_known_event_names", lambda fn: frozenset(known))
+
+
+def test_invented_event_name_reverts_to_rag(monkeypatch):
+    # RAG 원래 event는 실재값(메인). LLM이 파일에 없는 '상품클릭'을 지어냄.
+    issues = [_issue("페넬로페", {"event_name": "click_PC_국문_메인", "ep_button_area": "오늘의특가", "ep_button_name": "상품_페넬로페"})]
+
+    async def fake_suggest(url, dicts):
+        return [{"event_name": "click_PC_국문_상품클릭", "ep_button_area": "상품리스트", "ep_button_name": "페넬로페 바렐 스트렝스"}]
+
+    _guard_env(monkeypatch, {"click_PC_국문_메인"})
+    monkeypatch.setattr(batch_scan_service, "suggest_tag_specs_for_page", fake_suggest)
+    asyncio.run(batch_scan_service._refine_issue_specs_with_llm("https://hddfs", issues))
+
+    spec = issues[0].recommended_ga_spec
+    assert spec["event_name"] == "click_PC_국문_메인"       # 지어낸 값 → 실재 RAG값으로 폴백
+    assert spec["ep_button_area"] == "상품리스트"            # area 개선은 유지
+    assert spec["ep_button_name"] == "페넬로페 바렐 스트렝스"   # name 개선도 유지
+
+
+def test_valid_event_name_kept(monkeypatch):
+    # LLM이 문맥으로 교정한 event가 파일에 실재하면 그대로 둔다(잘못된 RAG값으로 안 되돌림).
+    issues = [_issue("확대", {"event_name": "click_PC_국문_로그인", "ep_button_area": "비밀번호찾기", "ep_button_name": "확대"})]
+
+    async def fake_suggest(url, dicts):
+        return [{"event_name": "click_PC_국문_메인", "ep_button_area": "동영상", "ep_button_name": "확대"}]
+
+    _guard_env(monkeypatch, {"click_PC_국문_메인", "click_PC_국문_로그인"})
+    monkeypatch.setattr(batch_scan_service, "suggest_tag_specs_for_page", fake_suggest)
+    asyncio.run(batch_scan_service._refine_issue_specs_with_llm("https://hddfs", issues))
+
+    spec = issues[0].recommended_ga_spec
+    assert spec["event_name"] == "click_PC_국문_메인"   # 실재값 → LLM 교정 유지
+
+
+def test_known_event_names_extracts_from_ga_file():
+    # 실제 kr_pc.js에서 이벤트명 추출 (통합 검증)
+    known = batch_scan_service._known_event_names("kr_pc.js")
+    assert "click_PC_국문_메인" in known
+    assert "click_PC_국문_상품클릭" not in known
+    assert batch_scan_service._known_event_names("nonexistent.js") == frozenset()
