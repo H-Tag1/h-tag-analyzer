@@ -164,6 +164,29 @@ def test_variable_spec_preserved(monkeypatch):
     spec = issues[0].recommended_ga_spec
     assert spec["ep_button_name"] == "정렬기준_{{optNm}}"        # 리터럴로 안 덮임
     assert spec["ep_button_name_type"] == "expression"
+    assert called["v"] is False                                # 변수 항목은 LLM 호출조차 안 함(토큰 절약)
+
+
+def test_mixed_variable_preserved_literal_refined(monkeypatch):
+    # 변수 + 리터럴 혼합: 변수는 보존, 리터럴만 LLM에 보내 정교화한다.
+    _enable_azure(monkeypatch)
+    var_item = _issue("베스트 상품 선정 기준", {
+        "event_name": "click_PC_국문_혜택", "ep_button_area": "상세탭_혜택",
+        "ep_button_name": "정렬기준_{{optNm}}", "ep_button_name_type": "expression"})
+    lit_item = _issue("장바구니", {"event_name": "click_PC_국문_메인", "ep_button_area": "", "ep_button_name": ""})
+
+    sent = {"texts": []}
+
+    async def fake_suggest(url, dicts):
+        sent["texts"] = [d["element_text"] for d in dicts]
+        return [{"event_name": "click_PC_국문_메인", "ep_button_area": "헤더", "ep_button_name": "탭_장바구니"}]
+
+    monkeypatch.setattr(batch_scan_service, "suggest_tag_specs_for_page", fake_suggest)
+    asyncio.run(batch_scan_service._refine_issue_specs_with_llm("https://hddfs", [var_item, lit_item]))
+
+    assert sent["texts"] == ["장바구니"]                        # 리터럴만 LLM에 전달(변수 제외)
+    assert var_item.recommended_ga_spec["ep_button_name"] == "정렬기준_{{optNm}}"  # 변수 보존
+    assert lit_item.recommended_ga_spec["ep_button_name"] == "탭_장바구니"          # 리터럴 정교화
 
 
 def test_clean_product_name_removes_noise():

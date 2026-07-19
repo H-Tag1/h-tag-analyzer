@@ -288,6 +288,20 @@ def _clean_product_name(ep_button_name: str, element_text: str) -> str:
     return f"상품_{name_part}" if name_part else ep_button_name
 
 
+def _is_preserved_variable_spec(spec) -> bool:
+    """진짜 변수 표현식(이름에 {{ }} 템플릿이 있는 것, 예: 정렬기준_{{optNm}})인지 판별한다.
+
+    이런 스펙은 GA파일 핸들러에서 그대로 온 정확한 값이므로 LLM으로 덮지 않고 보존한다.
+    RAG 그룹 로직이 type=expression 플래그만 달고 이름은 리터럴을 채운 경우가 있어,
+    플래그가 아니라 실제 {{ }} 유무로 판별해야 오탐(리터럴 노이즈 보존)을 막는다.
+    """
+    spec = spec or {}
+    return (
+        spec.get("ep_button_name_type") in {"expression", "variable"}
+        and "{{" in str(spec.get("ep_button_name") or "")
+    )
+
+
 async def _refine_issue_specs_with_llm(page_url: str, issues) -> None:
     """누락(issues) 항목의 추천 GA 스펙을 LLM으로 정교화한다.
 
@@ -305,13 +319,18 @@ async def _refine_issue_specs_with_llm(page_url: str, issues) -> None:
     if not (settings.azure_openai_key and settings.azure_openai_endpoint):
         return
 
+    # 진짜 변수 표현식({{ }})은 이미 정확하므로 LLM에 보내지 않고 보존한다(토큰 절약).
+    refine_items = [item for item in issues if not _is_preserved_variable_spec(item.recommended_ga_spec)]
+    if not refine_items:
+        return
+
     issue_dicts = [
         {
             "element_selector": item.element_selector,
             "element_text": item.element_text,
             "recommended_ga_spec": {},
         }
-        for item in issues
+        for item in refine_items
     ]
     try:
         refined_specs = await suggest_tag_specs_for_page(page_url, issue_dicts)
@@ -322,18 +341,10 @@ async def _refine_issue_specs_with_llm(page_url: str, issues) -> None:
     channel = resolve_channel_or_none(page_url)
     known_events = _known_event_names(channel.template_filename) if channel else frozenset()
 
-    for item, refined in zip(issues, refined_specs):
+    for item, refined in zip(refine_items, refined_specs):
         if not refined:
             continue
         original = dict(item.recommended_ga_spec or {})
-        # 진짜 변수 표현식(이름에 {{ }} 템플릿 마커가 있는 것, 예: 정렬기준_{{optNm}})만 보존한다.
-        # RAG 그룹 로직이 type=expression 플래그만 달고 이름은 대표의 리터럴을 채운 경우가 있어,
-        # 플래그가 아니라 실제 {{ }} 유무로 판별해야 오탐(리터럴 노이즈 보존)을 막는다.
-        if (
-            original.get("ep_button_name_type") in {"expression", "variable"}
-            and "{{" in str(original.get("ep_button_name") or "")
-        ):
-            continue
         # LLM 값 우선, LLM이 비운 필드는 기존 RAG 스펙으로 보완(무손실)
         merged = dict(original)
         for key, value in refined.items():
