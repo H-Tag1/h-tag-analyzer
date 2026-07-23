@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 ProgressReporter = Callable[[Dict[str, Any]], Awaitable[None]]
 
 CLICK_EVENT_WAIT_MS = 800
+REQUEST_CLICK_EVENT_WAIT_MS = 2500
 CLICK_EVENT_POLL_MS = 100
 
 ELEMENT_QUERY_JS = """
@@ -192,7 +193,13 @@ async def apply_click_tracking_detection(
                 else []
             )
 
-            await _wait_for_click_events(page, datalayer_before, network_collector, network_hit_count_before)
+            await _wait_for_click_events(
+                page,
+                datalayer_before,
+                network_collector,
+                network_hit_count_before,
+                wait_ms=_click_event_wait_ms(element),
+            )
             datalayer_after = await _collect_datalayer(page)
             url_after_datalayer = page.url
             new_events = (
@@ -453,6 +460,20 @@ async def _click_initial_element(
                 }}
                 const x = rect.left + rect.width / 2;
                 const y = rect.top + rect.height / 2;
+                const centerInViewport = (
+                    x >= 0 &&
+                    y >= 0 &&
+                    x < window.innerWidth &&
+                    y < window.innerHeight
+                );
+                // Carousel libraries keep inactive slides rendered outside the
+                // viewport. Exact request-rule candidates can still be verified
+                // through their delegated click handler without guessing a
+                // screen coordinate.
+                if (requestMode && !centerInViewport) {{
+                    el.click();
+                    return {{ programmatic: true }};
+                }}
                 if (payload.excludePersistentNavigation) {{
                     const hitElement = document.elementFromPoint(x, y);
                     if (
@@ -667,9 +688,22 @@ def _normalize_tracking_event(event: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-async def _wait_for_click_events(page: Page, datalayer_before, network_collector, hit_count_before: int) -> None:
+def _click_event_wait_ms(element: PageElement) -> int:
+    if element.request_rule_ids:
+        return REQUEST_CLICK_EVENT_WAIT_MS
+    return CLICK_EVENT_WAIT_MS
+
+
+async def _wait_for_click_events(
+    page: Page,
+    datalayer_before,
+    network_collector,
+    hit_count_before: int,
+    *,
+    wait_ms: int = CLICK_EVENT_WAIT_MS,
+) -> None:
     waited_ms = 0
-    while waited_ms < CLICK_EVENT_WAIT_MS:
+    while waited_ms < wait_ms:
         if _collect_click_network_events(network_collector, hit_count_before):
             return
 
@@ -726,6 +760,14 @@ def _filter_events_for_element_label(
         )
     ]
     candidates = interaction_events or events
+
+    # 요청서 검증 후보는 ga4Common에서 찾은 정확한 selector로 클릭한다. 이때
+    # ep_button_name에는 화면 버튼명 앞에 영역 문맥이 붙을 수 있으므로
+    # (예: "자세히 보기" -> "라메르 스토리_자세히보기") DOM 텍스트만으로
+    # 제거하지 않는다. 요청 event_name과 EP 3개 일치는 검증 단계에서 별도로
+    # 엄격하게 확인한다.
+    if element.request_rule_ids:
+        return candidates
 
     filtered: List[Dict[str, Any]] = []
     for event in candidates:

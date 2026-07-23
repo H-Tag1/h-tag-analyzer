@@ -1,3 +1,7 @@
+import asyncio
+
+from playwright.async_api import async_playwright
+
 from models.bounding_box import BoundingBox
 from models.network_tag_hit import NetworkTagHit
 from models.page_element import PageElement
@@ -7,6 +11,10 @@ from services.element_grouping_service import (
 )
 from services.tag_classification_service import classify_network_tags
 from services.tracking.click_detector import (
+    CLICK_EVENT_WAIT_MS,
+    REQUEST_CLICK_EVENT_WAIT_MS,
+    _click_initial_element,
+    _click_event_wait_ms,
     _filter_events_for_element_label,
     attach_click_network_hits_to_elements,
 )
@@ -42,6 +50,68 @@ def test_filter_events_rejects_ga_interaction_when_ep_name_differs():
     filtered = _filter_events_for_element_label(element, events)
 
     assert filtered == []
+
+
+def test_filter_events_keeps_contextual_name_for_request_rule_candidate():
+    element = _best_product_element(
+        selector=".lamer .main_lamerstory .rel a",
+        text="A SEA OF INSPIRATION 깊은 푸른 바다에서 영감을 얻다 자세히 보기",
+        click_tracking_events=[],
+        request_rule_ids=["rule-5"],
+    )
+    event = {
+        "event_name": "click_MO_국문_명품관_025301",
+        "ep_button_area": "라메르",
+        "ep_button_area2": "라메르 스토리",
+        "ep_button_name": "라메르 스토리_자세히보기",
+    }
+
+    filtered = _filter_events_for_element_label(element, [event])
+
+    assert filtered == [event]
+
+
+def test_request_rule_candidate_uses_extended_click_event_wait():
+    standard = _best_product_element(click_tracking_events=[])
+    requested = _best_product_element(
+        click_tracking_events=[],
+        request_rule_ids=["rule-6"],
+    )
+
+    assert _click_event_wait_ms(standard) == CLICK_EVENT_WAIT_MS
+    assert _click_event_wait_ms(requested) == REQUEST_CLICK_EVENT_WAIT_MS
+    assert REQUEST_CLICK_EVENT_WAIT_MS > CLICK_EVENT_WAIT_MS
+
+
+def test_request_rule_candidate_outside_viewport_uses_dom_click():
+    async def verify_click() -> None:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            page = await browser.new_page(viewport={"width": 390, "height": 844})
+            await page.set_content("""
+                <a
+                    id="inactive-slide"
+                    href="#"
+                    style="position: fixed; left: 1000px; top: 100px; width: 120px; height: 60px"
+                    onclick="window.__requestClickCount = (window.__requestClickCount || 0) + 1"
+                >Inactive slide</a>
+            """)
+            element = PageElement(
+                selector="#inactive-slide",
+                text="Inactive slide",
+                element_type="a",
+                request_rule_ids=["request-rule"],
+                request_rule_selectors=["#inactive-slide"],
+                request_dom_index=0,
+            )
+
+            clicked = await _click_initial_element(page, element)
+
+            assert clicked is True
+            assert await page.evaluate("window.__requestClickCount") == 1
+            await browser.close()
+
+    asyncio.run(verify_click())
 
 
 def test_classify_does_not_mark_click_tested_element_as_tracked_on_name_mismatch():
