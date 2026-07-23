@@ -14,10 +14,12 @@ from models.network_tag_hit import NetworkTagHit
 from services.tracking.event_normalizer import (
     element_has_verified_click_tracking,
     ep_button_names_match,
+    event_signature,
     extract_ep_params,
     is_interaction_event,
     normalize_element_label,
     params_from_event_dict,
+    tracking_event_matches_element_label,
 )
 from services.tracking.tracking_data import merge_tracking_data
 from services.element_grouping_service import (
@@ -180,6 +182,7 @@ async def apply_click_tracking_detection(
             if not clicked:
                 continue
             element.click_tested = True
+            element.click_result_inherited = False
 
             datalayer_after = await _collect_datalayer(page)
             url_after_datalayer = page.url
@@ -722,18 +725,11 @@ def _filter_events_for_element_label(
             params_from_event_dict(event),
         )
     ]
-    if interaction_events:
-        return interaction_events
-
-    label = normalize_element_label(element.text)
-    if not label:
-        return events
+    candidates = interaction_events or events
 
     filtered: List[Dict[str, Any]] = []
-    for event in events:
-        params = params_from_event_dict(event)
-        event_label = params.get("ep_button_name", "")
-        if event_label and not ep_button_names_match(element.text, event_label):
+    for event in candidates:
+        if not tracking_event_matches_element_label(element, event):
             continue
         filtered.append(event)
     return filtered
@@ -750,39 +746,102 @@ def attach_click_network_hits_to_elements(
     if not elements or not hits:
         return 0
 
-    click_hits = [hit for hit in hits if hit.trigger == "click"]
+    click_hits: List[Tuple[NetworkTagHit, str, Dict[str, str], str]] = []
+    for hit in hits:
+        if hit.trigger != "click":
+            continue
+        params = extract_ep_params(hit)
+        event_name = (hit.event_name or "").strip()
+        if not is_interaction_event(event_name, params):
+            continue
+        click_hits.append((
+            hit,
+            event_name,
+            params,
+            event_signature(event_name, params),
+        ))
     if not click_hits:
         return 0
 
+    represented_signatures: Counter[str] = Counter()
+    for element in elements:
+        if (
+            element.click_group_id
+            and not element.click_group_representative
+            and not element.request_rule_ids
+        ):
+            continue
+        element_events = list(element.click_tracking_events)
+        if isinstance(element.tracking_data, dict) and element.tracking_data:
+            element_events.append(element.tracking_data)
+        element_signatures: set[str] = set()
+        for event in element_events:
+            if not isinstance(event, dict):
+                continue
+            event_name = _event_name_from_tracking_dict(event)
+            params = params_from_event_dict(event)
+            if (
+                not is_interaction_event(event_name, params)
+                or not tracking_event_matches_element_label(element, event)
+            ):
+                continue
+            element_signatures.add(event_signature(event_name, params))
+        represented_signatures.update(element_signatures)
+
+    remaining_hits: List[Tuple[NetworkTagHit, str, Dict[str, str]]] = []
+    for hit, event_name, params, signature in click_hits:
+        if represented_signatures[signature] > 0:
+            represented_signatures[signature] -= 1
+            continue
+        remaining_hits.append((hit, event_name, params))
+
+    unresolved_elements = [
+        element
+        for element in sorted(elements, key=lambda item: item.element_index)
+        if element.click_tested
+        and not is_hamburger_drawer_element(element)
+        and not element_has_verified_click_tracking(element)
+        and (
+            not element.click_group_id
+            or element.click_group_representative
+            or bool(element.request_rule_ids)
+        )
+    ]
+    if not unresolved_elements or not remaining_hits:
+        return 0
+
     attached = 0
-    used_hit_indices: set[int] = set()
-    for element in sorted(elements, key=lambda item: item.element_index):
-        if is_hamburger_drawer_element(element) or not element.click_tested:
+    assigned_element_indices: set[int] = set()
+    for _hit, event_name, params in remaining_hits:
+        event_label = params.get("ep_button_name", "")
+        if not event_label:
             continue
-        if element_has_verified_click_tracking(element):
+        matches = [
+            element
+            for element in unresolved_elements
+            if element.element_index not in assigned_element_indices
+            and normalize_element_label(element.text)
+            and ep_button_names_match(element.text, event_label)
+        ]
+        if len(matches) != 1:
             continue
 
-        for idx, hit in enumerate(click_hits):
-            if idx in used_hit_indices:
-                continue
-            params = extract_ep_params(hit)
-            event_name = (hit.event_name or "").strip()
-            if not is_interaction_event(event_name, params):
-                continue
-
-            event_dict = {
-                "event_name": event_name,
-                **params,
-            }
-            element.click_tracking_events.append(event_dict)
-            element.has_ga_tag = True
-            if "click_network" not in element.tracking_methods:
-                element.tracking_methods.append("click_network")
-            element.tracking_data = merge_tracking_data(element.tracking_data, event_dict)
-            used_hit_indices.add(idx)
-            attached += 1
-            break
+        element = matches[0]
+        event_dict = {
+            "event_name": event_name,
+            **params,
+        }
+        element.click_tracking_events.append(event_dict)
+        element.has_ga_tag = True
+        if "click_network" not in element.tracking_methods:
+            element.tracking_methods.append("click_network")
+        element.tracking_data = merge_tracking_data(element.tracking_data, event_dict)
+        assigned_element_indices.add(element.element_index)
+        attached += 1
 
     if attached:
-        logger.info("Attached %d orphan click network hit(s) to clicked elements", attached)
+        logger.info(
+            "Attached %d uniquely matched orphan click network hit(s) to clicked elements",
+            attached,
+        )
     return attached

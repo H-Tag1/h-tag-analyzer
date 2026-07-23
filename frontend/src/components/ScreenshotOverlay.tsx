@@ -21,21 +21,34 @@ interface Props {
   onSelectExcluded?: (index: number) => void
 }
 
-function hasVisibleBox(box: BoundingBox): boolean {
-  return box.width > 0 && box.height > 0
-}
-
 function isNormalizedBox(box: BoundingBox): boolean {
   return box.x <= 1 && box.y <= 1 && box.width <= 1 && box.height <= 1
 }
 
 function boxToStyle(box: BoundingBox, imageWidth: number, imageHeight: number) {
-  if (isNormalizedBox(box)) {
+  const normalized = isNormalizedBox(box)
+  const boundsWidth = normalized ? 1 : imageWidth
+  const boundsHeight = normalized ? 1 : imageHeight
+  const left = Math.max(box.x, 0)
+  const top = Math.max(box.y, 0)
+  const right = Math.min(box.x + box.width, boundsWidth)
+  const bottom = Math.min(box.y + box.height, boundsHeight)
+
+  if (right <= left || bottom <= top) return null
+
+  const clipped = {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  }
+
+  if (normalized) {
     return {
-      left: `${box.x * 100}%`,
-      top: `${box.y * 100}%`,
-      width: `${box.width * 100}%`,
-      height: `${box.height * 100}%`,
+      left: `${clipped.x * 100}%`,
+      top: `${clipped.y * 100}%`,
+      width: `${clipped.width * 100}%`,
+      height: `${clipped.height * 100}%`,
     }
   }
 
@@ -43,10 +56,10 @@ function boxToStyle(box: BoundingBox, imageWidth: number, imageHeight: number) {
     total > 0 ? `${(value / total) * 100}%` : '0%'
 
   return {
-    left: toPercent(box.x, imageWidth),
-    top: toPercent(box.y, imageHeight),
-    width: toPercent(box.width, imageWidth),
-    height: toPercent(box.height, imageHeight),
+    left: toPercent(clipped.x, imageWidth),
+    top: toPercent(clipped.y, imageHeight),
+    width: toPercent(clipped.width, imageWidth),
+    height: toPercent(clipped.height, imageHeight),
   }
 }
 
@@ -117,7 +130,7 @@ export default function ScreenshotOverlay({
 
   return (
     <div
-      className={`relative w-full ${isMobileScreenshot ? 'mx-auto' : ''}`}
+      className={`relative w-full overflow-hidden ${isMobileScreenshot ? 'mx-auto' : ''}`}
       style={maxDisplayWidth ? { maxWidth: maxDisplayWidth } : undefined}
     >
       <img
@@ -130,7 +143,8 @@ export default function ScreenshotOverlay({
 
       <div className="absolute inset-0 pointer-events-none">
         {trackedItems.map((item, i) => {
-          if (!hasVisibleBox(item.bounding_box)) return null
+          const boxStyle = boxToStyle(item.bounding_box, originalWidth, originalHeight)
+          if (!boxStyle) return null
           const isSelected = selectedTrackedIndex === i
           const isGroupInherited = item.verification_source === 'group_inherited'
 
@@ -148,7 +162,7 @@ export default function ScreenshotOverlay({
               style={{
                 position: 'absolute',
                 pointerEvents: 'auto',
-                ...boxToStyle(item.bounding_box, originalWidth, originalHeight),
+                ...boxStyle,
               }}
               className={`cursor-pointer rounded transition-all ${
                 isGroupInherited
@@ -172,7 +186,8 @@ export default function ScreenshotOverlay({
         })}
 
         {issues.map((item, i) => {
-          if (!hasVisibleBox(item.bounding_box)) return null
+          const boxStyle = boxToStyle(item.bounding_box, originalWidth, originalHeight)
+          if (!boxStyle) return null
           const isSelected = selectedIssueIndex === i
           const isGroupInherited = item.verification_source === 'group_inherited'
 
@@ -190,7 +205,7 @@ export default function ScreenshotOverlay({
               style={{
                 position: 'absolute',
                 pointerEvents: 'auto',
-                ...boxToStyle(item.bounding_box, originalWidth, originalHeight),
+                ...boxStyle,
               }}
               className={`cursor-pointer rounded transition-all ${
                 isGroupInherited
@@ -214,7 +229,8 @@ export default function ScreenshotOverlay({
         })}
 
         {reviewItems.map((item, i) => {
-          if (!hasVisibleBox(item.bounding_box)) return null
+          const boxStyle = boxToStyle(item.bounding_box, originalWidth, originalHeight)
+          if (!boxStyle) return null
           const isSelected = selectedReviewIndex === i
 
           return (
@@ -231,7 +247,7 @@ export default function ScreenshotOverlay({
               style={{
                 position: 'absolute',
                 pointerEvents: 'auto',
-                ...boxToStyle(item.bounding_box, originalWidth, originalHeight),
+                ...boxStyle,
               }}
               className={`cursor-pointer rounded transition-all ${
                 isSelected
@@ -249,7 +265,8 @@ export default function ScreenshotOverlay({
         })}
 
         {excludedItems.map((item, i) => {
-          if (!hasVisibleBox(item.bounding_box)) return null
+          const boxStyle = boxToStyle(item.bounding_box, originalWidth, originalHeight)
+          if (!boxStyle) return null
           const isSelected = selectedExcludedIndex === i
 
           return (
@@ -266,7 +283,7 @@ export default function ScreenshotOverlay({
               style={{
                 position: 'absolute',
                 pointerEvents: 'auto',
-                ...boxToStyle(item.bounding_box, originalWidth, originalHeight),
+                ...boxStyle,
               }}
               className={`cursor-pointer rounded transition-all ${
                 isSelected

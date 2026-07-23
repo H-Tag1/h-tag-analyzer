@@ -163,6 +163,7 @@ async def collect_page_data_with_clean_capture(
             capture_elements = _shift_elements_to_screenshot(
                 capture_elements,
                 screenshot_offset_y,
+                width,
                 height,
             )
             await _report_progress(progress, {
@@ -227,14 +228,12 @@ async def _scan_current_page(
     # 클릭 후 스크린샷과 어긋나게 만든다. 이를 막기 위해 좌표 수집과 스크린샷을
     # 클릭 검사 이전, 동일한 초기 레이아웃에서 연속 수행한다. 이후 클릭 검사는
     # 그 좌표에 추적 결과만 주석으로 달 뿐 좌표를 재측정하지 않으므로 정합이 유지된다.
+    await _prepare_capture_page(page, scan_range)
     elements = await _collect_elements(
         page,
         exclude_auth_actions=exclude_auth_actions,
         scan_range=scan_range,
     )
-    await page.evaluate("() => window.scrollTo(0, 0)")
-    await page.wait_for_timeout(300)
-    await _prepare_capture_page(page, scan_range)
     screenshot_id, width, height, screenshot_offset_y = await _take_screenshot(page, scan_range)
     await _report_progress(progress, {
         "type": "screenshot_done",
@@ -251,7 +250,12 @@ async def _scan_current_page(
         progress=progress,
         elements=elements,
     )
-    elements = _shift_elements_to_screenshot(elements, screenshot_offset_y, height)
+    elements = _shift_elements_to_screenshot(
+        elements,
+        screenshot_offset_y,
+        width,
+        height,
+    )
 
     return screenshot_id, width, height, elements, datalayer, network_tags
 
@@ -422,16 +426,32 @@ async def _collect_elements(
             ).trim().slice(0, 120);
         }
 
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+
         function isVisible(el, rect, style) {
             return (
                 rect.width > 0 &&
                 rect.height > 0 &&
                 rect.bottom > 0 &&
                 rect.right > 0 &&
+                rect.left < viewportWidth &&
                 style.display !== 'none' &&
                 style.visibility !== 'hidden' &&
                 Number(style.opacity || '1') > 0
             );
+        }
+
+        function toDocumentBoundingBox(rect) {
+            const scrollX = window.scrollX || window.pageXOffset || 0;
+            const scrollY = window.scrollY || window.pageYOffset || 0;
+            const left = Math.max(rect.left, 0);
+            const right = Math.min(rect.right, viewportWidth);
+            return {
+                x: left + scrollX,
+                y: rect.y + scrollY,
+                width: Math.max(right - left, 0),
+                height: rect.height,
+            };
         }
 
         function buildCandidateKey(el, rules, text) {
@@ -490,8 +510,6 @@ async def _collect_elements(
                 const style = window.getComputedStyle(el);
                 const rules = matchingRules(el);
                 const text = elementText(el);
-                const scrollX = window.scrollX || window.pageXOffset || 0;
-                const scrollY = window.scrollY || window.pageYOffset || 0;
                 const staticTrackingSignals = collectSignals(el);
                 // self-hit-test: 요소 중심점이 자기 자신(또는 자식)을 반환하지 않으면
                 // 다른 요소에 가려진 것 (예: 스티키 헤더의 화면에 안 보이는 중복 nav).
@@ -510,12 +528,7 @@ async def _collect_elements(
                     text,
                     element_type: el.tagName.toLowerCase(),
                     structure_group_key: buildStructureGroupKey(el),
-                    bounding_box: {
-                        x: rect.x + scrollX,
-                        y: rect.y + scrollY,
-                        width: rect.width,
-                        height: rect.height,
-                    },
+                    bounding_box: toDocumentBoundingBox(rect),
                     render_box: null,
                     _occluded: occluded,
                     _viewport_y: rect.y,
@@ -540,8 +553,27 @@ async def _collect_elements(
             let bestDistance = Infinity;
             for (const twin of collected) {
                 if (twin === item || twin._occluded) continue;
-                if (twin.text !== item.text || twin.element_type !== item.element_type) continue;
-                const distance = Math.abs(twin._viewport_y - item._viewport_y);
+                if (
+                    twin.text !== item.text ||
+                    twin.element_type !== item.element_type ||
+                    twin.selector !== item.selector
+                ) continue;
+                const widthDelta = Math.abs(
+                    twin.bounding_box.width - item.bounding_box.width
+                );
+                const heightDelta = Math.abs(
+                    twin.bounding_box.height - item.bounding_box.height
+                );
+                if (
+                    widthDelta > Math.max(8, item.bounding_box.width * 0.35) ||
+                    heightDelta > Math.max(8, item.bounding_box.height * 0.35)
+                ) continue;
+                const xDistance = Math.abs(
+                    twin.bounding_box.x - item.bounding_box.x
+                );
+                if (xDistance > Math.max(120, item.bounding_box.width * 2)) continue;
+                const yDistance = Math.abs(twin._viewport_y - item._viewport_y);
+                const distance = Math.hypot(xDistance, yDistance);
                 if (distance < bestDistance) {
                     bestDistance = distance;
                     best = twin;
@@ -558,14 +590,20 @@ async def _collect_elements(
         });
 
         return collected
-            .map(({ _occluded, _viewport_y, ...item }) => item)
-            .filter(item => (
-                verificationOnly
-                    ? item.request_rule_ids.length > 0
-                    : item.visible || (
-                        includeHiddenRuleMatches && item.request_rule_ids.length > 0
+            .filter(item => {
+                const hasVisibleTarget = item.visible && (
+                    !item._occluded || Boolean(item.render_box)
+                );
+                const isRequestedHiddenMatch = (
+                    includeHiddenRuleMatches && item.request_rule_ids.length > 0
+                );
+                return verificationOnly
+                    ? item.request_rule_ids.length > 0 && (
+                        hasVisibleTarget || isRequestedHiddenMatch
                     )
-            ))
+                    : hasVisibleTarget || isRequestedHiddenMatch;
+            })
+            .map(({ _occluded, _viewport_y, ...item }) => item)
             .map((item, index) => ({
                 ...item,
                 element_index: index,
@@ -887,6 +925,67 @@ async def _prepare_capture_page(page: Page, scan_range: Optional[ScanRange]) -> 
         pass
 
     await page.evaluate("() => window.scrollTo(0, 0)")
+    await _wait_for_layout_stability(page)
+
+
+async def _wait_for_layout_stability(
+    page: Page,
+    timeout_ms: int = 2400,
+    sample_interval_ms: int = 160,
+    stable_samples: int = 3,
+) -> None:
+    """Wait until vertical positions stop changing before coordinates are captured."""
+    try:
+        await page.evaluate(
+            """async (payload) => {
+                const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+                const selector = 'button, a, [onclick], input[type="submit"], input[type="button"]';
+
+                function mix(hash, value) {
+                    hash ^= value | 0;
+                    return Math.imul(hash, 16777619);
+                }
+
+                function signature() {
+                    const nodes = Array.from(document.querySelectorAll(selector));
+                    let hash = 2166136261;
+                    const limit = Math.min(nodes.length, 1200);
+                    for (let index = 0; index < limit; index += 1) {
+                        const rect = nodes[index].getBoundingClientRect();
+                        hash = mix(hash, Math.round(rect.top + window.scrollY));
+                        hash = mix(hash, Math.round(rect.height));
+                    }
+                    const height = Math.max(
+                        document.documentElement.scrollHeight || 0,
+                        document.body?.scrollHeight || 0,
+                        window.innerHeight || 0
+                    );
+                    return `${height}:${nodes.length}:${hash >>> 0}`;
+                }
+
+                const startedAt = Date.now();
+                let previous = '';
+                let stable = 0;
+                while (Date.now() - startedAt < payload.timeoutMs) {
+                    await wait(payload.sampleIntervalMs);
+                    const current = signature();
+                    if (current === previous) {
+                        stable += 1;
+                        if (stable >= payload.stableSamples) return;
+                    } else {
+                        previous = current;
+                        stable = 0;
+                    }
+                }
+            }""",
+            {
+                "timeoutMs": timeout_ms,
+                "sampleIntervalMs": sample_interval_ms,
+                "stableSamples": stable_samples,
+            },
+        )
+    except Exception as exc:
+        logger.debug("Layout stability wait failed: %s", exc)
 
 
 async def _take_capture_screenshots(
@@ -1148,16 +1247,21 @@ async def _resolve_screenshot_clip(page: Page, scan_range: Optional[ScanRange]) 
 def _shift_elements_to_screenshot(
     elements: List[PageElement],
     offset_y: float,
+    screenshot_width: int,
     screenshot_height: int,
 ) -> List[PageElement]:
-    def _shift_box(box: BoundingBox) -> BoundingBox:
+    def _shift_box(box: BoundingBox) -> Optional[BoundingBox]:
+        left = max(box.x, 0.0)
+        right = min(box.x + box.width, float(screenshot_width))
         top = max(box.y - offset_y, 0.0)
         bottom = min(box.y + box.height - offset_y, float(screenshot_height))
+        if right <= left or bottom <= top:
+            return None
         return BoundingBox(
-            x=box.x,
+            x=left,
             y=top,
-            width=box.width,
-            height=max(bottom - top, 0.0),
+            width=right - left,
+            height=bottom - top,
         )
 
     for element in elements:

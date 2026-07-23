@@ -20,3 +20,10 @@ def test_ep_button_names_match_alias_group():
 
 def test_ep_button_names_match_rejects_unrelated():
     assert not ep_button_names_match("스킨케어", "카테고리_메이크업")
+
+
+def test_ep_button_names_match_product_prefix_with_noisy_dom_text():
+    assert ep_button_names_match(
+        "1 시어 버터 핸드 크림 150ML 록시땅 시어 버터 핸드 크림 150ML",
+        "상품_록시땅_시어버터핸드크림150ML",
+    )

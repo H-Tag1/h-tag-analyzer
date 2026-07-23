@@ -82,3 +82,23 @@ def test_no_render_box_is_noop():
     # render_box가 하나도 없으면 아무것도 하지 않는다 (early return).
     _apply_render_box_corrections([real], [item])
     assert round(item.bounding_box.y) == 212
+
+
+def test_same_coordinates_do_not_correct_a_different_element():
+    phantom = _element(
+        "세일",
+        BoundingBox(x=398, y=168, width=28, height=22),
+        render_box=BoundingBox(x=394, y=212, width=30, height=22),
+    )
+    other = TrackedAnalysisItem(
+        element_selector="button.nav",
+        element_text="베스트",
+        bounding_box=BoundingBox(x=398, y=168, width=28, height=22),
+        tracking_description="click",
+        tracking_data={},
+    )
+
+    _apply_render_box_corrections([phantom], [other])
+
+    assert round(other.bounding_box.x) == 398
+    assert round(other.bounding_box.y) == 168

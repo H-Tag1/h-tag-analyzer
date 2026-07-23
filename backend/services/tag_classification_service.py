@@ -21,6 +21,7 @@ from services.tracking.event_normalizer import (
     param_signature,
     params_from_event_dict,
     prefer_click_events,
+    tracking_event_matches_element_label,
 )
 from services.ga4_channel_service import resolve_channel_or_none
 from services.hamburger_menu_filter import is_hamburger_drawer_element
@@ -188,6 +189,15 @@ def classify_network_tags(
             params = params_from_event_dict(click_event)
             if not is_interaction_event(event_name, params):
                 continue
+            misassigned_header = (
+                is_header_element(element)
+                and is_misassigned_header_event(event_name)
+            )
+            if (
+                not misassigned_header
+                and not tracking_event_matches_element_label(element, click_event)
+            ):
+                continue
 
             hit = _find_network_hit_for_event(click_hits, event_name, click_event)
             missing_fields = [field for field in EP_FIELDS if not params[field]]
@@ -198,7 +208,7 @@ def classify_network_tags(
             seen_keys.add(item_key)
 
             trigger = hit.trigger if hit else "click"
-            if is_header_element(element) and is_misassigned_header_event(event_name):
+            if misassigned_header:
                 issues.append(_header_misassigned_issue_item(element, event_name, page_url))
             elif not missing_fields:
                 tracked_items.append(_to_tracked_item(element, event_name, params, trigger))
@@ -256,7 +266,11 @@ def classify_network_tags(
             continue
         if is_hamburger_drawer_element(element):
             continue
-        if element.click_group_id and not element.click_group_representative:
+        if (
+            element.click_group_id
+            and not element.click_group_representative
+            and element.click_result_inherited
+        ):
             continue
         if element_has_verified_click_tracking(element):
             continue

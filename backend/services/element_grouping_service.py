@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 MIN_GROUP_SIZE = 2
 LAYOUT_ROW_TOLERANCE_PX = 48
 LAYOUT_COLUMN_TOLERANCE_PX = 48
-VARIABLE_EP_BUTTON_NAME_PREFIXES = EP_BUTTON_NAME_VALUE_PREFIXES + ("상품_",)
+VARIABLE_EP_BUTTON_NAME_PREFIXES = EP_BUTTON_NAME_VALUE_PREFIXES
 
 
 def _normalize_label(text: Optional[str]) -> str:
@@ -211,6 +211,13 @@ def should_click_for_verification(element: PageElement) -> bool:
     return element.click_group_representative
 
 
+def _has_direct_click_result(element: PageElement) -> bool:
+    return (
+        element.click_tested
+        and not element.click_result_inherited
+    )
+
+
 def _adapt_ep_button_name_for_member(existing_name: str, member_label: str) -> str:
     if not member_label:
         return existing_name
@@ -280,6 +287,7 @@ def propagate_group_click_results(elements: List[PageElement]) -> List[PageEleme
                 continue
 
             member.click_tested = representative.click_tested
+            member.click_result_inherited = representative.click_tested
             member.click_tracking_events = _adapt_events_for_member(
                 representative.click_tracking_events,
                 member,
@@ -400,6 +408,8 @@ def apply_group_tracking_inheritance(
             if member.element_index == source_member.element_index:
                 continue
             if is_hamburger_drawer_element(member):
+                continue
+            if _has_direct_click_result(member):
                 continue
 
             member_key = _element_overlay_key(member)
@@ -539,6 +549,8 @@ def expand_grouped_overlay_results(
             if member.element_index == representative.element_index:
                 continue
             if is_hamburger_drawer_element(member):
+                continue
+            if _has_direct_click_result(member):
                 continue
 
             member_key = _element_overlay_key(member)

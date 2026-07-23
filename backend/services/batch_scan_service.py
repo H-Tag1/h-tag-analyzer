@@ -222,14 +222,33 @@ def _apply_render_box_corrections(elements, *item_lists) -> None:
     """가려진 중복 요소(예: 스티키 헤더의 숨은 nav)의 오버레이 박스를, 화면에서 보이는
     쌍둥이 위치(element.render_box)로 옮긴다. 그룹핑/분류/카운트는 이미 원본 bounding_box로
     끝난 뒤이므로, 이 교정은 프론트로 나가는 렌더 좌표에만 영향을 준다."""
+    def correction_key(item, box):
+        selector = (
+            getattr(item, "selector", None)
+            or getattr(item, "element_selector", None)
+            or ""
+        )
+        text = (
+            getattr(item, "text", None)
+            or getattr(item, "element_text", None)
+            or ""
+        )
+        return (
+            str(selector),
+            str(text).strip(),
+            round(box.x),
+            round(box.y),
+            round(box.width),
+            round(box.height),
+        )
+
     corrections: dict = {}
     for element in elements:
         render_box = getattr(element, "render_box", None)
         box = getattr(element, "bounding_box", None)
         if not render_box or not box:
             continue
-        key = (round(box.x), round(box.y), round(box.width), round(box.height))
-        corrections[key] = render_box
+        corrections[correction_key(element, box)] = render_box
     if not corrections:
         return
     for items in item_lists:
@@ -237,8 +256,7 @@ def _apply_render_box_corrections(elements, *item_lists) -> None:
             box = item.bounding_box
             if not box:
                 continue
-            key = (round(box.x), round(box.y), round(box.width), round(box.height))
-            corrected = corrections.get(key)
+            corrected = corrections.get(correction_key(item, box))
             if corrected is not None:
                 item.bounding_box = corrected
 

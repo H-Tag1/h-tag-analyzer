@@ -22,6 +22,7 @@ EP_BUTTON_NAME_VALUE_PREFIXES: tuple[str, ...] = (
     "배너_",
     "메뉴_",
     "브랜드_",
+    "상품_",
 )
 
 
@@ -46,6 +47,17 @@ def ep_button_names_match(
             return True
     for prefix in EP_BUTTON_NAME_VALUE_PREFIXES:
         if event_label == normalize_element_label(f"{prefix}{element_text or ''}"):
+            return True
+        normalized_prefix = normalize_element_label(prefix)
+        if not event_label.startswith(normalized_prefix):
+            continue
+        event_value = "".join(
+            char
+            for char in event_label[len(normalized_prefix):]
+            if char.isalnum()
+        )
+        element_value = "".join(char for char in element_label if char.isalnum())
+        if len(event_value) >= 4 and event_value in element_value:
             return True
     return False
 
@@ -127,11 +139,28 @@ def is_verified_click_tracking_event(event: Any) -> bool:
     return is_click_event(event_name_from_dict(event))
 
 
+def tracking_event_matches_element_label(
+    element: PageElement,
+    event: Dict[str, Any],
+) -> bool:
+    element_label = normalize_element_label(element.text)
+    event_label = params_from_event_dict(event).get("ep_button_name", "")
+    if not element_label or not event_label:
+        return True
+    return ep_button_names_match(element.text, event_label)
+
+
 def element_has_verified_click_tracking(element: PageElement) -> bool:
-    if is_verified_click_tracking_event(element.tracking_data):
+    if (
+        is_verified_click_tracking_event(element.tracking_data)
+        and tracking_event_matches_element_label(element, element.tracking_data)
+    ):
         return True
     for event in prefer_click_events(element.click_tracking_events):
-        if is_verified_click_tracking_event(event):
+        if (
+            is_verified_click_tracking_event(event)
+            and tracking_event_matches_element_label(element, event)
+        ):
             return True
     return False
 
@@ -164,7 +193,10 @@ def element_click_param_keys(elements: List[PageElement], element_key_lookup) ->
     for element in elements:
         for event in element.click_tracking_events:
             event_name = event_name_from_dict(event)
-            if not is_click_event(event_name):
+            if (
+                not is_click_event(event_name)
+                or not tracking_event_matches_element_label(element, event)
+            ):
                 continue
             params = params_from_event_dict(event)
             keys.add(element_param_key(element, params, element_key_lookup))

@@ -69,6 +69,13 @@ pip3 install -r requirements.txt
 ```
 > Python 패키지 일괄 설치. `requirements.txt`에 적힌 라이브러리(FastAPI, Playwright 등)를 자동으로 모두 설치
 
+개발 및 테스트 환경에서는 아래 명령으로 테스트 의존성까지 설치합니다.
+
+```bash
+pip3 install -r requirements-dev.txt
+python3 -m pytest
+```
+
 ```bash
 python3 -m playwright install chromium
 ```
